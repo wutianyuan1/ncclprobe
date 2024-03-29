@@ -19,8 +19,8 @@ set_target_properties(ncclprobe PROPERTIES CUDA_ARCHITECTURES "70;80;86;89;90")
 target_link_libraries(ncclprobe ${CUDA_LIBRARIES} ${NCCL_LIBRARIES} ${MPI_CXX_LIBRARIES})
 
 ## The allreduce test program
-add_executable(test allreduce.cu)
-set_source_files_properties(allreduce.cu PROPERTIES LANGUAGE CUDA)
+add_executable(test test.cu)
+set_source_files_properties(test.cu PROPERTIES LANGUAGE CUDA)
 # H100/H800: 90, RTX40*: 89, A10: 86, A100/A30: 80, V100: 70
 set_target_properties(test PROPERTIES CUDA_ARCHITECTURES "70;80;86;89;90")
 target_link_libraries(test ${CUDA_LIBRARIES} ${NCCL_LIBRARIES} ${MPI_CXX_LIBRARIES})

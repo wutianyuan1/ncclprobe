@@ -28,10 +28,27 @@ bool initProbe(){
 }
 
 
+ncclResult_t probeBegin(void* buff1, void* buff2, size_t count,
+                        ncclDataType_t datatype, ncclComm_t comm,
+                        cudaStream_t stream, int aux)
+{
+    uint64_t buff1Addr = reinterpret_cast<uint64_t>(buff1),
+             buff2Addr = reinterpret_cast<uint64_t>(buff2),
+             dtypeID = (uint64_t)(datatype),
+             pid = (uint64_t)(getpid());
+}
+
 // ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype,
 //                       int peer, ncclComm_t comm, cudaStream_t stream)
 // {
-    
+
+// }
+
+
+// ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype,
+//                       int peer, ncclComm_t comm, cudaStream_t stream)
+// {
+
 // }
 
 
@@ -65,20 +82,6 @@ bool initProbe(){
 // }
 
 
-// ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype,
-//                       int peer, ncclComm_t comm, cudaStream_t stream)
-// {
-
-// }
-
-
-// ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype,
-//                       int peer, ncclComm_t comm, cudaStream_t stream)
-// {
-
-// }
-
-
 ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
                            ncclDataType_t datatype, ncclRedOp_t op,
                            ncclComm_t comm, cudaStream_t stream)
@@ -87,7 +90,12 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
         if (!initProbe()) exit(1);
     }
     auto call_time = (double)(duration_cast<milliseconds>(system_clock::now() - start_time).count()); 
-    std::cout << "PID=" << getpid() << ": allreduce " << count << "bytes, at time: " << call_time << std::endl;
+    int dev_id = -1;
+    char pcistr[50];
+    cudaGetDevice(&dev_id);
+    cudaDeviceGetPCIBusId(pcistr, 50, dev_id);
+    std::cout << "PID=" << getpid() << ": allreduce " << count << "bytes, at time: " << call_time\
+        << " device id: " << dev_id  << " pci: " << pcistr << std::endl;
     using func_t = typeof(ncclAllReduce);
     auto real_func = reinterpret_cast<func_t*>(dlsym(ncclLibHandle, "ncclAllReduce"));
     return (*real_func)(sendbuff, recvbuff, count, datatype, op, comm, stream);
