@@ -1,5 +1,6 @@
 from multiprocessing import shared_memory, resource_tracker
 import numpy as np
+import matplotlib.pyplot as plt
 
 METADATA_FIELDS = 5
 SIZEOF_INT64 = 8
@@ -42,6 +43,8 @@ class NcclRecord(object):
         return self.data[2]
     
     def __getitem__(self, idx):
+        if idx > self.num_records:
+            raise StopIteration
         head = self.data[3]
         start = ((head + idx) % self.max_records) * self.num_fields
         end = start + self.num_fields
@@ -55,5 +58,29 @@ class NcclRecord(object):
 
 
 if __name__ == '__main__':
-    rec = NcclRecord(5, 10)
-    print(rec, rec[3], sep='\n')
+    rec = NcclRecord(7, 1000)
+    d = {}
+    # print(rec.data[...])
+    for i in rec:
+        if i[3] == 0:
+            continue
+        if i[4] not in d:
+            d[i[4]] = [[i[3]], [i[2]]]
+        else:
+            d[i[4]][0].append(i[3])
+            d[i[4]][1].append(d[i[4]][1][-1] + i[2])
+    cs = ['red', 'g', 'b', 'black']
+    for gpu_id, (times, bytes) in d.items():
+        times = np.array(times).astype(np.float64) / 1000000.0
+        bytes = np.array(bytes) / (1024 * 1024)
+        # if gpu_id == 0:
+        #     print(times, bytes)
+        # dt = times[1:] - times[:-1]
+        plt.scatter(times, bytes, c=cs[gpu_id], label=f'GPU_{gpu_id}')
+        print(gpu_id, len(times))
+    plt.xlabel("Time / s")
+    plt.ylabel("Allreduced Size / MB")
+    plt.legend()
+    plt.savefig("dt.png")
+    # pid, (uint64_t)0, count, (uint64_t)(call_time * 1000), (uint64_t)(dev_id), buff1Addr, buff2Addr
+    # plt.

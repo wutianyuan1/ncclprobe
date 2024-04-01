@@ -59,7 +59,7 @@ inline bool RecordBuffer::empty() noexcept
 NcclRecordStorage::NcclRecordStorage(size_t numFields, size_t maxRecords)
     : numFields(numFields), maxRecords(maxRecords)
 {
-    shm = shared_memory_object(create_only, "ncclRecord", read_write);
+    shm = shared_memory_object(open_or_create, "ncclRecord", read_write);
     shm.truncate((METADATA_FIELDS + numFields * maxRecords) * sizeof(uint64_t));
     region = mapped_region(shm, read_write);
     buffer = RecordBuffer(numFields, maxRecords, region.get_address());
