@@ -27,7 +27,7 @@ bool initProbe(){
     dlerror();
     ncclLibHandle = handle;
     probeInited = true;
-    storage_buffer = std::shared_ptr<NcclRecordStorage>(new NcclRecordStorage(7, 1000));
+    storage_buffer = std::shared_ptr<NcclRecordStorage>(new NcclRecordStorage(7, 20000));
     return true;
 }
 
@@ -42,7 +42,7 @@ ncclResult_t probeBegin(const void* buff1, const void* buff2, size_t count,
              pid = (uint64_t)(getpid());
     auto call_time = (double)(duration_cast<milliseconds>(system_clock::now() - start_time).count()); 
     int dev_id = -1;
-    char pcistr[50];
+    char pcistr[50] = {0};
     cudaGetDevice(&dev_id);
     cudaDeviceGetPCIBusId(pcistr, 50, dev_id);
     // std::cout << "PID=" << getpid() << ": allreduce " << count << "bytes, at time: " << call_time\

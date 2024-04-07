@@ -1,6 +1,9 @@
 #include <vector>
+#include <atomic>
 #include <boost/interprocess/shared_memory_object.hpp>
 #include <boost/interprocess/mapped_region.hpp>
+#include <boost/interprocess/sync/interprocess_mutex.hpp>
+#include <boost/interprocess/sync/scoped_lock.hpp>
 
 
 class RecordBuffer
@@ -21,7 +24,14 @@ public:
     bool full() noexcept;
     bool empty() noexcept;
 private:
+    void loadMeta();
     void updateMeta();
+};
+
+
+struct Lock
+{
+    boost::interprocess::interprocess_mutex  mutex;
 };
 
 
@@ -29,6 +39,9 @@ class NcclRecordStorage
 {
     boost::interprocess::shared_memory_object shm;
     boost::interprocess::mapped_region region;
+    boost::interprocess::shared_memory_object lock_shm;
+    boost::interprocess::mapped_region lock_region;
+    Lock* lock;
     size_t numFields;
     size_t maxRecords;
     RecordBuffer buffer;
