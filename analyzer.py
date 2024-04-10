@@ -1,9 +1,28 @@
 from multiprocessing import shared_memory, resource_tracker
 import numpy as np
 import matplotlib.pyplot as plt
+import re
 
-METADATA_FIELDS = 6
+CONFIG = {}
 SIZEOF_INT64 = 8
+
+def load_config():
+    global CONFIG
+    with open("config.hpp") as header_file:
+        for line in header_file.readlines():
+            if line.startswith("#define"):
+                line.rstrip()
+                m = re.search(r'#define\s+([A-Za-z]\w+)\s+(.*)', line)
+                if m:
+                    content = m.group(2)
+                    CONFIG[m.group(1)] = int(content, base=16 if '0x' in content else 10)
+    with open("shm_storage.hpp") as storage_file:
+        all_lines = storage_file.read().replace("\n", "")
+        all_lines = re.sub(r" +", r" ", all_lines)
+        m = re.search(r'Record\((uint64\_t\s[A-Za-z0-9_]+,\s*)*', all_lines)
+        numfields = m.group(0).count(',')
+        CONFIG['NUM_FIELDS'] = numfields + CONFIG['MAX_DEVS']
+    print(CONFIG)
 
 
 def remove_shm_from_resource_tracker():
@@ -30,11 +49,11 @@ def remove_shm_from_resource_tracker():
 class NcclRecord(object):
     def __init__(self, num_fields, max_records):
         remove_shm_from_resource_tracker()
-        self.shm_size = (num_fields * max_records + METADATA_FIELDS) * SIZEOF_INT64
+        self.shm_size = (num_fields * max_records + CONFIG['METADATA_FIELDS']) * SIZEOF_INT64
         self.shm = shared_memory.SharedMemory(
             "ncclRecord", create=False, size=self.shm_size)
         self.data = np.frombuffer(self.shm.buf, np.int64)
-        self.buffer = self.data[METADATA_FIELDS:]
+        self.buffer = self.data[CONFIG['METADATA_FIELDS']:]
         self.num_fields = self.data[0]
         self.max_records = self.data[1]
 
@@ -58,7 +77,8 @@ class NcclRecord(object):
 
 
 if __name__ == '__main__':
-    rec = NcclRecord(7, 20000)
+    load_config()
+    rec = NcclRecord(CONFIG['NUM_FIELDS'], CONFIG['BUFFER_SIZE'])
     print(rec.data)
     d = {}
     # print(rec.data[...])
@@ -88,5 +108,3 @@ if __name__ == '__main__':
     ax2.set_ylabel(r"$\Delta$ t / s")
     plt.legend()
     plt.savefig("dt.png")
-    # pid, (uint64_t)0, count, (uint64_t)(call_time * 1000), (uint64_t)(dev_id), buff1Addr, buff2Addr
-    # plt.

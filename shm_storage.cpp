@@ -3,10 +3,6 @@
 #include <cassert>
 using namespace boost::interprocess;
 
-// numfields, maxrecords, numrecords, head, tail
-#define METADATA_FIELDS  6
-#define BUFFER_MAGIC 0xdeadbeef
-
 
 static void print_vec(std::vector<uint64_t>& v){
     std::cout << "Vector{";
@@ -112,5 +108,3 @@ void NcclRecordStorage::addRecord(std::vector<uint64_t>& record)
 {
     this->addRecord(std::move(record));
 }
-
-
