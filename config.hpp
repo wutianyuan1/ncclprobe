@@ -38,8 +38,8 @@ DEFINE_ENUM_WITH_STRING_CONVERSIONS(
 #define PCI_STR_LEN 64
 // max #GPUs
 #define MAX_DEVS 4
-// 6 metadata fields: numfields, maxrecords, numrecords, head, tail, magic
-#define METADATA_FIELDS  6
+// 7 metadata fields: numfields, maxrecords, numrecords, head, tail, magic, last_event
+#define METADATA_FIELDS  7
 // buffer magic number
 #define BUFFER_MAGIC 0xdeadbeef
 // max capacity of the buffer

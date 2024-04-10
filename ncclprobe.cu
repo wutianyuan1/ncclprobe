@@ -44,6 +44,10 @@ ncclResult_t probe_begin(const void* buff1, const void* buff2, size_t count,
     auto call_time = (double)(duration_cast<milliseconds>(system_clock::now() - start_time).count()); 
     uint64_t comm_devices[MAX_DEVS];
 
+    // skip operations with very small size (<1K)
+    if (count < 1024)
+        return ncclSuccess;
+
     memset(comm_devices, 0, sizeof(comm_devices));
     cudaGetDevice(&dev_id);
     cudaDeviceGetPCIBusId(pcistr, PCI_STR_LEN, dev_id);

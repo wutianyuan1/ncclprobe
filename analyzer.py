@@ -1,10 +1,23 @@
-from multiprocessing import shared_memory, resource_tracker
+import re
 import numpy as np
 import matplotlib.pyplot as plt
-import re
+import pandas as pd
+from multiprocessing import shared_memory, resource_tracker
 
 CONFIG = {}
+OPS = ['Send', 'Recv', 'Bcast', 'Broadcast', 'AllGather', 'ReduceScatter', 'AllReduce']
 SIZEOF_INT64 = 8
+
+def sizestr(size):
+    if size < 1024:
+        return str(size)
+    elif size < 1024*1024:
+        return str(size//1024) + "KB"
+    elif size < 1024*1024*1024:
+        return str(size//(1024**2)) + "MB"
+    else:
+        return str(size//(1024**3)) + "GB"
+
 
 def load_config():
     global CONFIG
@@ -47,6 +60,10 @@ def remove_shm_from_resource_tracker():
 
 
 class NcclRecord(object):
+    attrs = ['call_number', 'count', 'buff1', 'buff2',
+        'datatype', 'pid', 'call_time', 'device', 'caller',
+        'aux', 'num_devices'
+    ]
     def __init__(self, num_fields, max_records):
         remove_shm_from_resource_tracker()
         self.shm_size = (num_fields * max_records + CONFIG['METADATA_FIELDS']) * SIZEOF_INT64
@@ -60,6 +77,15 @@ class NcclRecord(object):
     @property
     def num_records(self):
         return self.data[2]
+
+    def get_profile_data(self, metric_name):
+        if metric_name == 'event_id':
+            return [i[-1] for i in self]
+        metric_id = self.attrs.index(metric_name)
+        ret = []
+        for record in self:
+            ret.append(record[metric_id])
+        return np.array(ret)
     
     def __getitem__(self, idx):
         if idx >= self.num_records:
@@ -76,35 +102,40 @@ class NcclRecord(object):
         return str(self)
 
 
+def plot_call_interval(record: NcclRecord):
+    field_keys = record.attrs + [f"device_{i}" for i in range(CONFIG['MAX_DEVS'] - 1)] + ['event_id']
+    df = pd.DataFrame([i for i in record], columns=field_keys)
+    print(df['num_devices'])
+    f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
+    colors = ['black', 'grey', 'blue', 'red', 'yellow', 'pink', 'green']
+    for gpu_id, per_gpu_calls in df.groupby('device'):
+        for op_id, per_op_calls in per_gpu_calls.groupby("call_number"):
+            # print(gpu_id, op_id, '='*60)
+            # print(per_op_calls)
+            xs, ys = [], []
+            prev = {}
+            per_op_calls = per_op_calls.sort_values(by=['event_id'])
+            for _, row in per_op_calls.iterrows():
+                cnt = sizestr(row['count'])
+                t = row['call_time']
+                xs.append(cnt)
+                if cnt not in prev:
+                    ys.append(0)
+                else:
+                    ys.append((t - prev[cnt])/(1000 * 1000))
+                prev[cnt] = t
+            axs[gpu_id].scatter(xs, ys, s=3, c=colors[op_id], label=OPS[op_id])
+        axs[gpu_id].set_xlabel("Operation Size")
+        if gpu_id == 0:
+            axs[gpu_id].set_ylabel(r"$\Delta$ t / s")
+        axs[gpu_id].legend()
+        # axs[gpu_id].set_ylim(0, 3)
+    plt.tight_layout()
+    plt.savefig("new_dt.png")
+
+
+
 if __name__ == '__main__':
     load_config()
-    rec = NcclRecord(CONFIG['NUM_FIELDS'], CONFIG['BUFFER_SIZE'])
-    print(rec.data)
-    d = {}
-    # print(rec.data[...])
-    j = 0
-    for i in rec:
-        if i[3] == 0:
-            continue
-        if i[4] not in d:
-            d[i[4]] = [[i[3]], [i[2]]]
-        else:
-            d[i[4]][0].append(i[3])
-            d[i[4]][1].append(d[i[4]][1][-1] + i[2])
-    cs = ['red', 'g', 'b', 'black']
-    plt.figure(figsize=(8, 4))
-    ax1 = plt.subplot(121)
-    ax2 = plt.subplot(122)
-    for gpu_id, (times, bytes) in d.items():
-        times = np.array(times).astype(np.float64) / 1000000.0
-        bytes = np.array(bytes) / (1024 * 1024)
-        dt = times[1:] - times[:-1]
-        ax1.plot(times, bytes, c=cs[gpu_id], label=f'GPU_{gpu_id}')
-        ax2.scatter(np.arange(len(dt)), dt, s=5, c=cs[gpu_id], label=f'GPU_{gpu_id}', alpha=0.2)
-        print(gpu_id, len(times))
-    ax1.set_xlabel("Time / s")
-    ax1.set_ylabel("Allreduced Size / MB")
-    ax2.set_xlabel("# of Allreduce calls")
-    ax2.set_ylabel(r"$\Delta$ t / s")
-    plt.legend()
-    plt.savefig("dt.png")
+    record = NcclRecord(CONFIG['NUM_FIELDS'], CONFIG['BUFFER_SIZE'])
+    plot_call_interval(record)

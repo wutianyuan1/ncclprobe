@@ -48,6 +48,7 @@ class RecordBuffer
     size_t numFields;
     size_t maxRecords;
     size_t numRecords;
+    size_t eventID;
     off_t head;
     off_t tail;
     uint64_t* buffer;
@@ -62,7 +63,7 @@ public:
     bool empty() noexcept;
 private:
     void loadMeta();
-    void updateMeta();
+    void updateMeta(bool init);
 };
 
 

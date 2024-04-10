@@ -13,7 +13,7 @@ static void print_vec(std::vector<uint64_t>& v){
 
 /* === Buffer Implementation === */
 RecordBuffer::RecordBuffer(size_t numFields, size_t maxRecords, void* mem_address)
-    : numFields(numFields), maxRecords(maxRecords), numRecords(0), head(0), tail(0)
+    : numFields(numFields), maxRecords(maxRecords), numRecords(0), eventID(0), head(0), tail(0)
 {
     this->addr = reinterpret_cast<uint64_t*>(mem_address);
     this->buffer = this->addr + METADATA_FIELDS;
@@ -22,7 +22,7 @@ RecordBuffer::RecordBuffer(size_t numFields, size_t maxRecords, void* mem_addres
     if (addr[5] != BUFFER_MAGIC)
     {
         addr[5] = BUFFER_MAGIC;
-        updateMeta();
+        updateMeta(true);
     }    
 }
 
@@ -35,15 +35,18 @@ void RecordBuffer::loadMeta()
     numRecords = addr[2];
     head = addr[3];
     tail = addr[4];
+    eventID = addr[6];
 }
 
-void RecordBuffer::updateMeta()
+void RecordBuffer::updateMeta(bool init)
 {
     addr[0] = numFields;
     addr[1] = maxRecords;
     addr[2] = numRecords;
     addr[3] = head;
     addr[4] = tail;
+    if (!init)
+        addr[6] = eventID + 1;
 }
 
 void RecordBuffer::push(std::vector<uint64_t>&& record)
@@ -51,13 +54,15 @@ void RecordBuffer::push(std::vector<uint64_t>&& record)
     assert(record.size() == numFields);
     loadMeta();
     // printf("before RANK:%s, num:%lu, head:%lu, tail:%lu\n", getenv("RANK"), addr[2], addr[3], addr[4]);
+    // HACK: store event ID in the last cell of record...
+    record[record.size() - 1] = eventID;
     memcpy(buffer + tail * numFields, record.data(), numFields * sizeof(uint64_t));
     tail = (tail + 1) % maxRecords;
     if (numRecords == maxRecords)
         head = (head + 1) % maxRecords;
     if (numRecords < maxRecords)
         numRecords++;
-    updateMeta();
+    updateMeta(false);
     // printf("after RANK:%s, num:%lu, head:%lu, tail:%lu\n", getenv("RANK"), addr[2], addr[3], addr[4]);
 }
 
