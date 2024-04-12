@@ -104,32 +104,41 @@ class NcclRecord(object):
 
 def plot_call_interval(record: NcclRecord):
     field_keys = record.attrs + [f"device_{i}" for i in range(CONFIG['MAX_DEVS'] - 1)] + ['event_id']
-    df = pd.DataFrame([i for i in record], columns=field_keys)
-    print(df['num_devices'])
+    record_df = pd.DataFrame([i for i in record], columns=field_keys)
+    for i in range(8, 48, 4):
+        sub = record_df[i:i+4]
+        sub = sub[['caller', 'call_time']]
+        sub = sub.sort_values(by='call_time')
+        # sub['call_time'] -= 5070000
+        print(sub)
+        print("="*60)
+
     f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
-    colors = ['black', 'grey', 'blue', 'red', 'yellow', 'pink', 'green']
-    for gpu_id, per_gpu_calls in df.groupby('device'):
+    colors = ['powderblue', 'grey', 'lightblue', 'red', 'lightyellow', 'pink', 'lightgreen']
+    stats = []
+    for gpu_id, per_gpu_calls in record_df.groupby('device'):
+        dts = {}
         for op_id, per_op_calls in per_gpu_calls.groupby("call_number"):
-            # print(gpu_id, op_id, '='*60)
-            # print(per_op_calls)
-            xs, ys = [], []
-            prev = {}
             per_op_calls = per_op_calls.sort_values(by=['event_id'])
-            for _, row in per_op_calls.iterrows():
-                cnt = sizestr(row['count'])
-                t = row['call_time']
-                xs.append(cnt)
-                if cnt not in prev:
-                    ys.append(0)
-                else:
-                    ys.append((t - prev[cnt])/(1000 * 1000))
-                prev[cnt] = t
-            axs[gpu_id].scatter(xs, ys, s=3, c=colors[op_id], label=OPS[op_id])
-        axs[gpu_id].set_xlabel("Operation Size")
+            ts = per_op_calls['call_time'].to_numpy()
+            dt = (ts[1:] - ts[:-1]) / (1000 * 1000)  # convert microsecond to second
+            # skip the rare calls
+            if len(dt) < 50:
+                continue
+            dts[op_id] = dt
+            stats.append([gpu_id, OPS[op_id], len(dt), np.mean(dt), np.std(dt)])
+        bplot = axs[gpu_id].boxplot(
+            list(dts.values()), notch=True, vert=True, patch_artist=True,
+            showfliers=False, labels=[OPS[key] for key in dts])  
+        for patch, color in zip(bplot['boxes'], colors):
+            patch.set_facecolor(color)
+        axs[gpu_id].set_xlabel("NCCL Operation")
+        axs[gpu_id].set_title(f"GPU {gpu_id}")
         if gpu_id == 0:
             axs[gpu_id].set_ylabel(r"$\Delta$ t / s")
-        axs[gpu_id].legend()
-        # axs[gpu_id].set_ylim(0, 3)
+    stats_df = pd.DataFrame(stats, columns=['GPU_ID', 'OP_ID', 'LEN', 'INTERVAL_MEAN', 'INTERVAL_STD'])
+    print(stats_df)
+    stats_df.to_csv("interval_stats.csv")
     plt.tight_layout()
     plt.savefig("new_dt.png")
 

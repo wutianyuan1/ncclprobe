@@ -41,7 +41,7 @@ ncclResult_t probe_begin(const void* buff1, const void* buff2, size_t count,
 {
     int dev_id = -1, caller = -1, numdevs = -1;
     char pcistr[PCI_STR_LEN] = {0};
-    auto call_time = (double)(duration_cast<milliseconds>(system_clock::now() - start_time).count()); 
+    auto call_time = (double)(duration_cast<microseconds>(system_clock::now() - start_time).count()); 
     uint64_t comm_devices[MAX_DEVS];
 
     // skip operations with very small size (<1K)
@@ -57,7 +57,7 @@ ncclResult_t probe_begin(const void* buff1, const void* buff2, size_t count,
     Record record(
         (uint64_t)number, count, reinterpret_cast<uint64_t>(buff1),
         reinterpret_cast<uint64_t>(buff2), (uint64_t)(datatype),
-        (uint64_t)(getpid()), (uint64_t)(call_time * 1000), (uint64_t)(dev_id),
+        (uint64_t)(getpid()), (uint64_t)(call_time), (uint64_t)(dev_id),
         (uint64_t)(caller), aux, (uint64_t)(numdevs), comm_devices
     );
     

@@ -2,3 +2,5 @@ build
 test
 *.so
 *.png
+figs/
+logs/
