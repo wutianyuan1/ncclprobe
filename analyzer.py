@@ -149,7 +149,7 @@ def find_slow_events(record: NcclRecord):
         per_gpu_record.sort_values(by='event_id', inplace=True)
         call_time = per_gpu_record['call_time'].to_numpy()
         call_id = per_gpu_record['call_number'].to_numpy()
-        start, period = find_period(call_id, nlags=30, significance_level=0.8)
+        start, period = find_period(call_id, nlags=50, significance_level=0.8)
         print(gpu_id, start, period)
         pargs = {"ax": axs[gpu_id], "color": colors[gpu_id], "label": f"GPU_{gpu_id}",
                  "xlabel": "Execution Time / us", "ylabel": "Iteration Time / us"}

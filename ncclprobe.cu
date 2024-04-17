@@ -14,6 +14,9 @@ using namespace std::chrono;
 static bool probe_inited = false;
 static void* nccl_lib_handle = nullptr;
 static auto start_time = system_clock::now();
+static NcclNumber last_call_id = NcclNumber::INVALID;
+static uint64_t repeated_call_num = 0;
+static uint64_t accumulated_count = 0;
 std::shared_ptr<NcclRecordStorage> storage_buffer = nullptr;
 
 
@@ -47,12 +50,46 @@ ncclResult_t probe_begin(const void* buff1, const void* buff2, size_t count,
     // skip operations with very small size (<1K)
     if (count < 1024)
         return ncclSuccess;
-
+    
     memset(comm_devices, 0, sizeof(comm_devices));
     cudaGetDevice(&dev_id);
     cudaDeviceGetPCIBusId(pcistr, PCI_STR_LEN, dev_id);
     ncclCommUserRank(comm, &caller);
     ncclCommCount(comm, &numdevs);
+    
+    /* Special Note! For tensor parallelism (TP), there are too many alternative
+    ALLGATHER and REDUCE_SCATTER calls, with each of them has a small size, the
+    interval between these calls are very short, and recording all of them will
+    influence the performance significantly. The pattern is like (1 * AllReduce,
+    n * (AllGather | ReduceScatter), 1 * AllReduce, ...). So we compress these
+    AllGather | ReduceScatter to a single record. */
+    auto can_compress = [=](NcclNumber call_id) {
+        return (call_id == NcclNumber::ALL_GATHER || call_id == NcclNumber::REDUCE_SCATTER);
+    };
+    
+    if (can_compress(number))
+    {
+        // If this call is AllGather or ReduceScatter (special operators in TP)
+        repeated_call_num++;
+        accumulated_count += count;
+        last_call_id = number;
+        return ncclSuccess;
+    }
+    else if (can_compress(last_call_id) && (!can_compress(number))) 
+    {
+        // the previous call is, but the current is not
+        // we should first add this compressed record to the buffer
+        Record compressed_record(
+            repeated_call_num, accumulated_count, reinterpret_cast<uint64_t>(buff1),
+            reinterpret_cast<uint64_t>(buff2), (uint64_t)(datatype),
+            (uint64_t)(getpid()), (uint64_t)(call_time), (uint64_t)(dev_id),
+            (uint64_t)(caller), aux, (uint64_t)(numdevs), comm_devices
+        );
+        storage_buffer->addRecord(compressed_record.toVector());
+        repeated_call_num = 0;
+        accumulated_count = 0;
+        last_call_id = number;
+    }
 
     Record record(
         (uint64_t)number, count, reinterpret_cast<uint64_t>(buff1),
@@ -60,7 +97,7 @@ ncclResult_t probe_begin(const void* buff1, const void* buff2, size_t count,
         (uint64_t)(getpid()), (uint64_t)(call_time), (uint64_t)(dev_id),
         (uint64_t)(caller), aux, (uint64_t)(numdevs), comm_devices
     );
-    
+
     storage_buffer->addRecord(record.toVector());
     return ncclSuccess;
 }

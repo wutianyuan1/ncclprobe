@@ -7,6 +7,7 @@ import Rbeast as rb
 from statsmodels.tsa import stattools
 from scipy.signal import find_peaks
 from scipy import stats
+from statsmodels.graphics.tsaplots import plot_acf
 
 
 def remove_outliers(iter_durations, iter_start):
@@ -36,7 +37,7 @@ def find_performance_drop_naive(call_id, call_time, period, start):
 
 def validate_performance_drop(
         iter_durations, iter_start, change_point_ids, change_points,
-        length_thresh=50, degradation_thresh=0.2):
+        length_thresh=10, degradation_thresh=0.2):
     # @param length_thresh: we consider this performance change point is
     # valid only if the interval between two change points >= length_thresh
     # @param degradation_thresh: we report this event as a performance change
@@ -130,16 +131,13 @@ def find_performance_drop(call_id, call_time, period, start, thresh_prob=0.8, pl
     return real_change_point_df
 
 
-def find_period(seq, nlags=30, significance_level=0.7):
+def find_period(seq, nlags=50, significance_level=0.7):
     def dist(seq1, seq2):
         # Count the number of different elements in two sequence
         # We assume the NCCL call pattern is *exactly the same*
         # within each training iteration
         assert len(seq1) == len(seq2)
         return len(seq1) - np.sum(seq1 == seq2)
-    for i in range(100):
-        print(seq[i], end=' ')
-    print()
     acf_values = stattools.acf(seq, nlags=nlags)
     # Find peaks in the ACF that are above the significance level
     peaks, _ = find_peaks(acf_values, height=significance_level)

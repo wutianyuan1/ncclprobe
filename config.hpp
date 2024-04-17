@@ -32,6 +32,7 @@ DEFINE_ENUM_WITH_STRING_CONVERSIONS(
     (ALL_GATHER)
     (REDUCE_SCATTER)
     (ALL_REDUCE)
+    (INVALID)
 )
 
 // max length of PCIe string
