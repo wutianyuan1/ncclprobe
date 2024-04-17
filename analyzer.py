@@ -35,9 +35,9 @@ def load_config():
     with open("shm_storage.hpp") as storage_file:
         all_lines = storage_file.read().replace("\n", "")
         all_lines = re.sub(r" +", r" ", all_lines)
-        m = re.search(r'Record\((uint64\_t\s[A-Za-z0-9_]+,\s*)*', all_lines)
-        numfields = m.group(0).count(',')
-        CONFIG['NUM_FIELDS'] = numfields + CONFIG['MAX_DEVS']
+        m = re.search(r'struct Record\{\s*uint64\_t\s([A-Za-z0-9_]+,\s*)*', all_lines)
+        numfields = m.group(0).count(',') + 1
+        CONFIG['NUM_FIELDS'] = numfields
     print(CONFIG)
 
 
@@ -65,7 +65,7 @@ def remove_shm_from_resource_tracker():
 class NcclRecord(object):
     attrs = ['call_number', 'count', 'buff1', 'buff2',
              'datatype', 'pid', 'call_time', 'device', 'caller',
-             'aux', 'num_devices']
+             'aux', 'duration', 'num_devices', 'event_id']
 
     def __init__(self, num_fields, max_records):
         remove_shm_from_resource_tracker()
@@ -76,6 +76,11 @@ class NcclRecord(object):
         self.buffer = self.data[CONFIG['METADATA_FIELDS']:]
         self.num_fields = self.data[0]
         self.max_records = self.data[1]
+
+    def __del__(self):
+        # Remove the mmap from the shared memory regions
+        del self.buffer
+        del self.data
 
     @property
     def num_records(self):
@@ -106,7 +111,7 @@ class NcclRecord(object):
 
 
 def plot_call_interval(record: NcclRecord):
-    field_keys = record.attrs + [f"device_{i}" for i in range(CONFIG['MAX_DEVS'] - 1)] + ['event_id']
+    field_keys = record.attrs
     record_df = pd.DataFrame([i for i in record], columns=field_keys)
     f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
     colors = ['powderblue', 'grey', 'lightblue', 'red', 'lightyellow', 'pink', 'lightgreen']
@@ -120,7 +125,6 @@ def plot_call_interval(record: NcclRecord):
             # skip the rare calls
             if len(dt) < 50:
                 continue
-            print(gpu_id, OPS[op_id], per_op_calls['count'])
             dts[op_id] = dt
             stats.append([gpu_id, OPS[op_id], len(dt), np.mean(dt), np.std(dt)])
         bplot = axs[gpu_id].boxplot(
@@ -133,14 +137,13 @@ def plot_call_interval(record: NcclRecord):
         if gpu_id == 0:
             axs[gpu_id].set_ylabel(r"$\Delta$ t / s")
     stats_df = pd.DataFrame(stats, columns=['GPU_ID', 'OP_ID', 'LEN', 'INTERVAL_MEAN', 'INTERVAL_STD'])
-    print(stats_df)
     stats_df.to_csv("logs/interval_stats.csv")
     plt.tight_layout()
     plt.savefig("figs/new_dt.png")
 
 
 def find_slow_events(record: NcclRecord):
-    field_keys = record.attrs + [f"device_{i}" for i in range(CONFIG['MAX_DEVS'] - 1)] + ['event_id']
+    field_keys = record.attrs
     record_df = pd.DataFrame([i for i in record], columns=field_keys)
     f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
     colors = ['powderblue', 'grey', 'pink', 'green']
@@ -150,7 +153,6 @@ def find_slow_events(record: NcclRecord):
         call_time = per_gpu_record['call_time'].to_numpy()
         call_id = per_gpu_record['call_number'].to_numpy()
         start, period = find_period(call_id, nlags=50, significance_level=0.8)
-        print(gpu_id, start, period)
         pargs = {"ax": axs[gpu_id], "color": colors[gpu_id], "label": f"GPU_{gpu_id}",
                  "xlabel": "Execution Time / us", "ylabel": "Iteration Time / us"}
         find_performance_drop(call_id, call_time, period, start, plot=True, plot_args=pargs)
@@ -158,10 +160,39 @@ def find_slow_events(record: NcclRecord):
     plt.savefig("figs/period.png")
 
 
+def find_communication(record: NcclRecord):
+    field_keys = record.attrs
+    record_df = pd.DataFrame([i for i in record], columns=field_keys)
+    f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
+    colors = ['powderblue', 'grey', 'pink', 'green']
+
+    for (gpu_id, per_gpu_record) in record_df.groupby("device"):
+        per_gpu_record.sort_values(by='event_id', inplace=True)
+        call_id = per_gpu_record['call_number'].to_numpy()
+        call_time = per_gpu_record['call_time'].to_numpy()
+        start, period = find_period(call_id, nlags=50, significance_level=0.8)
+        comm_duration, iter_start = [], []
+        for i in range(start, len(per_gpu_record), period):
+            if i + period >= len(per_gpu_record):
+                continue
+            durations = per_gpu_record['duration'][i:i+period].to_numpy()
+            t_comm = np.sum(durations.astype(np.float64) / 1000.0)
+            comm_duration.append(t_comm)
+            iter_start.append(call_time[i])
+        comm_duration = np.array(comm_duration)
+        iter_start = np.array(iter_start)
+
+        axs[gpu_id].scatter(iter_start, comm_duration, c=colors[gpu_id])
+        axs[gpu_id].set_ylim(0, 70)
+        print(gpu_id, np.mean(comm_duration), np.std(comm_duration), comm_duration)
+    plt.tight_layout()
+    plt.savefig("figs/comm.png")
+
+
 if __name__ == '__main__':
     logging.basicConfig(filename='logs/analyzer.log')
     logging.getLogger().setLevel(logging.INFO)
     load_config()
     record = NcclRecord(CONFIG['NUM_FIELDS'], CONFIG['BUFFER_SIZE'])
-    find_slow_events(record)
-    # plot_call_interval(record)
+    # find_slow_events(record)
+    find_communication(record)

@@ -17,7 +17,19 @@ static auto start_time = system_clock::now();
 static NcclNumber last_call_id = NcclNumber::INVALID;
 static uint64_t repeated_call_num = 0;
 static uint64_t accumulated_count = 0;
+static float accumulated_duration = 0.0;
 std::shared_ptr<NcclRecordStorage> storage_buffer = nullptr;
+
+#define EVENT_RECORD_START\
+    cudaEvent_t start, stop;\
+    cudaEventCreate(&start);\
+    cudaEventCreate(&stop);\
+    cudaEventRecord(start, stream);
+
+#define EVENT_RECORD_END\
+    cudaEventRecord(stop);\
+    cudaEventSynchronize(stop);\
+    cudaEventElapsedTime(&duration_ms, start, stop);
 
 
 bool init_probe(){
@@ -38,9 +50,10 @@ bool init_probe(){
 }
 
 
-ncclResult_t probe_begin(const void* buff1, const void* buff2, size_t count,
-                        ncclDataType_t datatype, ncclComm_t comm,
-                        cudaStream_t stream, NcclNumber number, uint64_t aux)
+ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
+                       ncclDataType_t datatype, ncclComm_t comm,
+                       cudaStream_t stream, NcclNumber number, uint64_t aux,
+                       float duration)
 {
     int dev_id = -1, caller = -1, numdevs = -1;
     char pcistr[PCI_STR_LEN] = {0};
@@ -72,6 +85,7 @@ ncclResult_t probe_begin(const void* buff1, const void* buff2, size_t count,
         // If this call is AllGather or ReduceScatter (special operators in TP)
         repeated_call_num++;
         accumulated_count += count;
+        accumulated_duration += duration;
         last_call_id = number;
         return ncclSuccess;
     }
@@ -83,11 +97,13 @@ ncclResult_t probe_begin(const void* buff1, const void* buff2, size_t count,
             repeated_call_num, accumulated_count, reinterpret_cast<uint64_t>(buff1),
             reinterpret_cast<uint64_t>(buff2), (uint64_t)(datatype),
             (uint64_t)(getpid()), (uint64_t)(call_time), (uint64_t)(dev_id),
-            (uint64_t)(caller), aux, (uint64_t)(numdevs), comm_devices
+            (uint64_t)(caller), aux, (uint64_t)(accumulated_duration * 1000 * 1000),
+            (uint64_t)(numdevs)
         );
         storage_buffer->addRecord(compressed_record.toVector());
         repeated_call_num = 0;
         accumulated_count = 0;
+        accumulated_duration = 0.0;
         last_call_id = number;
     }
 
@@ -95,17 +111,13 @@ ncclResult_t probe_begin(const void* buff1, const void* buff2, size_t count,
         (uint64_t)number, count, reinterpret_cast<uint64_t>(buff1),
         reinterpret_cast<uint64_t>(buff2), (uint64_t)(datatype),
         (uint64_t)(getpid()), (uint64_t)(call_time), (uint64_t)(dev_id),
-        (uint64_t)(caller), aux, (uint64_t)(numdevs), comm_devices
+        (uint64_t)(caller), aux, (uint64_t)(duration * 1000 * 1000),
+        (uint64_t)(numdevs)
     );
-
     storage_buffer->addRecord(record.toVector());
     return ncclSuccess;
 }
 
-ncclResult_t probe_end()
-{
-    return ncclSuccess;
-}
 
 ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype,
                       int peer, ncclComm_t comm, cudaStream_t stream)
@@ -114,9 +126,13 @@ ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatyp
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclSend);
     auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclSend"));
-    probe_begin(sendbuff, nullptr, count, datatype, comm, stream, NcclNumber::SEND, (uint64_t)peer);
+    float duration_ms = 0;
+
+    EVENT_RECORD_START
     auto ret = (*real_func)(sendbuff, count, datatype, peer, comm, stream);
-    probe_end();
+    EVENT_RECORD_END
+
+    log_event(sendbuff, nullptr, count, datatype, comm, stream, NcclNumber::SEND, (uint64_t)peer, duration_ms);
     return ret;
 }
 
@@ -128,9 +144,13 @@ ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype,
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclRecv);
     auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclRecv"));
-    probe_begin(nullptr, recvbuff, count, datatype, comm, stream, NcclNumber::RECV, (uint64_t)peer);
+    float duration_ms = 0;
+
+    EVENT_RECORD_START
     auto ret = (*real_func)(recvbuff, count, datatype, peer, comm, stream);
-    probe_end();
+    EVENT_RECORD_END
+
+    log_event(nullptr, recvbuff, count, datatype, comm, stream, NcclNumber::RECV, (uint64_t)peer, duration_ms);
     return ret;
 }
 
@@ -142,9 +162,13 @@ ncclResult_t ncclBcast(void* buff, size_t count, ncclDataType_t datatype,
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclBcast);
     auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclBcast"));
-    probe_begin(buff, nullptr, count, datatype, comm, stream, NcclNumber::BCAST, (uint64_t)root);
+    float duration_ms = 0;
+
+    EVENT_RECORD_START
     auto ret = (*real_func)(buff, count, datatype, root, comm, stream);
-    probe_end();
+    EVENT_RECORD_END
+
+    log_event(buff, nullptr, count, datatype, comm, stream, NcclNumber::BCAST, (uint64_t)root, duration_ms);
     return ret;
 }
 
@@ -157,9 +181,13 @@ ncclResult_t ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count,
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclBroadcast);
     auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclBroadcast"));
-    probe_begin(sendbuff, recvbuff, count, datatype, comm, stream, NcclNumber::BROADCAST, (uint64_t)root);
+    float duration_ms = 0;
+
+    EVENT_RECORD_START
     auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, root, comm, stream);
-    probe_end();
+    EVENT_RECORD_END
+
+    log_event(sendbuff, recvbuff, count, datatype, comm, stream, NcclNumber::BROADCAST, (uint64_t)root, duration_ms);
     return ret;
 }
 
@@ -171,9 +199,13 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcoun
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclAllGather);
     auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclAllGather"));
-    probe_begin(sendbuff, recvbuff, sendcount, datatype, comm, stream, NcclNumber::ALL_GATHER, (uint64_t)0);
+    float duration_ms = 0;
+
+    EVENT_RECORD_START
     auto ret = (*real_func)(sendbuff, recvbuff, sendcount, datatype, comm, stream);
-    probe_end();
+    EVENT_RECORD_END
+
+    log_event(sendbuff, recvbuff, sendcount, datatype, comm, stream, NcclNumber::ALL_GATHER, (uint64_t)0, duration_ms);
     return ret;
 }
 
@@ -186,9 +218,13 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff, size_t recv
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclReduceScatter);
     auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclReduceScatter"));
-    probe_begin(sendbuff, recvbuff, recvcount, datatype, comm, stream, NcclNumber::REDUCE_SCATTER, (uint64_t)op);
+    float duration_ms = 0;
+
+    EVENT_RECORD_START
     auto ret = (*real_func)(sendbuff, recvbuff, recvcount, datatype, op, comm, stream);
-    probe_end();
+    EVENT_RECORD_END
+
+    log_event(sendbuff, recvbuff, recvcount, datatype, comm, stream, NcclNumber::REDUCE_SCATTER, (uint64_t)op, duration_ms);
     return ret;
 }
 
@@ -201,8 +237,12 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclAllReduce);
     auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclAllReduce"));
-    probe_begin(sendbuff, recvbuff, count, datatype, comm, stream, NcclNumber::ALL_REDUCE, (uint64_t)op);
+    float duration_ms = 0;
+
+    EVENT_RECORD_START
     auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, op, comm, stream);
-    probe_end();
+    EVENT_RECORD_END
+
+    log_event(sendbuff, recvbuff, count, datatype, comm, stream, NcclNumber::ALL_REDUCE, (uint64_t)op, duration_ms);
     return ret;
 }
