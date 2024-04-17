@@ -1,23 +1,25 @@
 import re
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from slow_detection import find_period, find_drop
+from slow_detection import find_period, find_performance_drop
 from multiprocessing import shared_memory, resource_tracker
 
 CONFIG = {}
 OPS = ['Send', 'Recv', 'Bcast', 'Broadcast', 'AllGather', 'ReduceScatter', 'AllReduce']
 SIZEOF_INT64 = 8
 
+
 def sizestr(size):
     if size < 1024:
         return str(size)
-    elif size < 1024*1024:
-        return str(size//1024) + "KB"
-    elif size < 1024*1024*1024:
-        return str(size//(1024**2)) + "MB"
+    elif size < 1024 * 1024:
+        return str(size // 1024) + "KB"
+    elif size < 1024 * 1024 * 1024:
+        return str(size // (1024**2)) + "MB"
     else:
-        return str(size//(1024**3)) + "GB"
+        return str(size // (1024**3)) + "GB"
 
 
 def load_config():
@@ -62,9 +64,9 @@ def remove_shm_from_resource_tracker():
 
 class NcclRecord(object):
     attrs = ['call_number', 'count', 'buff1', 'buff2',
-        'datatype', 'pid', 'call_time', 'device', 'caller',
-        'aux', 'num_devices'
-    ]
+             'datatype', 'pid', 'call_time', 'device', 'caller',
+             'aux', 'num_devices']
+
     def __init__(self, num_fields, max_records):
         remove_shm_from_resource_tracker()
         self.shm_size = (num_fields * max_records + CONFIG['METADATA_FIELDS']) * SIZEOF_INT64
@@ -87,7 +89,7 @@ class NcclRecord(object):
         for record in self:
             ret.append(record[metric_id])
         return np.array(ret)
-    
+
     def __getitem__(self, idx):
         if idx >= self.num_records:
             raise StopIteration
@@ -123,7 +125,7 @@ def plot_call_interval(record: NcclRecord):
             stats.append([gpu_id, OPS[op_id], len(dt), np.mean(dt), np.std(dt)])
         bplot = axs[gpu_id].boxplot(
             list(dts.values()), notch=True, vert=True, patch_artist=True,
-            showfliers=False, labels=[OPS[key] for key in dts])  
+            showfliers=False, labels=[OPS[key] for key in dts])
         for patch, color in zip(bplot['boxes'], colors):
             patch.set_facecolor(color)
         axs[gpu_id].set_xlabel("NCCL Operation")
@@ -137,27 +139,28 @@ def plot_call_interval(record: NcclRecord):
     plt.savefig("figs/new_dt.png")
 
 
-
-
 def find_slow_events(record: NcclRecord):
     field_keys = record.attrs + [f"device_{i}" for i in range(CONFIG['MAX_DEVS'] - 1)] + ['event_id']
     record_df = pd.DataFrame([i for i in record], columns=field_keys)
     f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
-    colors = ['powderblue', 'red', 'pink', 'green']
+    colors = ['powderblue', 'grey', 'pink', 'green']
 
     for (gpu_id, per_gpu_record) in record_df.groupby("device"):
+        per_gpu_record.sort_values(by='event_id', inplace=True)
         call_time = per_gpu_record['call_time'].to_numpy()
         call_id = per_gpu_record['call_number'].to_numpy()
         start, period = find_period(call_id, nlags=30, significance_level=0.8)
         print(gpu_id, start, period)
         pargs = {"ax": axs[gpu_id], "color": colors[gpu_id], "label": f"GPU_{gpu_id}",
                  "xlabel": "Execution Time / us", "ylabel": "Iteration Time / us"}
-        find_drop(call_id, call_time, period, start, plot=True, plot_args=pargs)
+        find_performance_drop(call_id, call_time, period, start, plot=True, plot_args=pargs)
     plt.tight_layout()
     plt.savefig("figs/period.png")
 
 
 if __name__ == '__main__':
+    logging.basicConfig(filename='logs/analyzer.log')
+    logging.getLogger().setLevel(logging.INFO)
     load_config()
     record = NcclRecord(CONFIG['NUM_FIELDS'], CONFIG['BUFFER_SIZE'])
     find_slow_events(record)
