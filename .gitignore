@@ -4,3 +4,4 @@ test
 *.png
 figs/
 logs/
+__pycache__/

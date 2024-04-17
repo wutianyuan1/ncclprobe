@@ -2,6 +2,7 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from slow_detection import find_period, find_drop
 from multiprocessing import shared_memory, resource_tracker
 
 CONFIG = {}
@@ -105,14 +106,6 @@ class NcclRecord(object):
 def plot_call_interval(record: NcclRecord):
     field_keys = record.attrs + [f"device_{i}" for i in range(CONFIG['MAX_DEVS'] - 1)] + ['event_id']
     record_df = pd.DataFrame([i for i in record], columns=field_keys)
-    for i in range(8, 48, 4):
-        sub = record_df[i:i+4]
-        sub = sub[['caller', 'call_time']]
-        sub = sub.sort_values(by='call_time')
-        # sub['call_time'] -= 5070000
-        print(sub)
-        print("="*60)
-
     f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
     colors = ['powderblue', 'grey', 'lightblue', 'red', 'lightyellow', 'pink', 'lightgreen']
     stats = []
@@ -125,6 +118,7 @@ def plot_call_interval(record: NcclRecord):
             # skip the rare calls
             if len(dt) < 50:
                 continue
+            print(gpu_id, OPS[op_id], per_op_calls['count'])
             dts[op_id] = dt
             stats.append([gpu_id, OPS[op_id], len(dt), np.mean(dt), np.std(dt)])
         bplot = axs[gpu_id].boxplot(
@@ -138,13 +132,33 @@ def plot_call_interval(record: NcclRecord):
             axs[gpu_id].set_ylabel(r"$\Delta$ t / s")
     stats_df = pd.DataFrame(stats, columns=['GPU_ID', 'OP_ID', 'LEN', 'INTERVAL_MEAN', 'INTERVAL_STD'])
     print(stats_df)
-    stats_df.to_csv("interval_stats.csv")
+    stats_df.to_csv("logs/interval_stats.csv")
     plt.tight_layout()
-    plt.savefig("new_dt.png")
+    plt.savefig("figs/new_dt.png")
 
+
+
+
+def find_slow_events(record: NcclRecord):
+    field_keys = record.attrs + [f"device_{i}" for i in range(CONFIG['MAX_DEVS'] - 1)] + ['event_id']
+    record_df = pd.DataFrame([i for i in record], columns=field_keys)
+    f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
+    colors = ['powderblue', 'red', 'pink', 'green']
+
+    for (gpu_id, per_gpu_record) in record_df.groupby("device"):
+        call_time = per_gpu_record['call_time'].to_numpy()
+        call_id = per_gpu_record['call_number'].to_numpy()
+        start, period = find_period(call_id, nlags=30, significance_level=0.8)
+        print(gpu_id, start, period)
+        pargs = {"ax": axs[gpu_id], "color": colors[gpu_id], "label": f"GPU_{gpu_id}",
+                 "xlabel": "Execution Time / us", "ylabel": "Iteration Time / us"}
+        find_drop(call_id, call_time, period, start, plot=True, plot_args=pargs)
+    plt.tight_layout()
+    plt.savefig("figs/period.png")
 
 
 if __name__ == '__main__':
     load_config()
     record = NcclRecord(CONFIG['NUM_FIELDS'], CONFIG['BUFFER_SIZE'])
-    plot_call_interval(record)
+    find_slow_events(record)
+    # plot_call_interval(record)
