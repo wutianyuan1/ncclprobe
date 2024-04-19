@@ -13,10 +13,15 @@ link_directories(${NCCL_LIBRARY_DIRS})
 link_directories(${MPI_LIBRARY_PATH})
 
 ## The intercept library
+add_library(globalstatus SHARED global_status.cu)
+# H100/H800: 90, RTX40*: 89, A10: 86, A100/A30: 80, V100: 70
+set_target_properties(globalstatus PROPERTIES CUDA_ARCHITECTURES "70;80;86;89;90")
+target_link_libraries(globalstatus ${CUDA_LIBRARIES} ${NCCL_LIBRARIES} ${MPI_CXX_LIBRARIES})
+
 add_library(ncclprobe SHARED ncclprobe.cu shm_storage.cpp)
 # H100/H800: 90, RTX40*: 89, A10: 86, A100/A30: 80, V100: 70
 set_target_properties(ncclprobe PROPERTIES CUDA_ARCHITECTURES "70;80;86;89;90")
-target_link_libraries(ncclprobe ${CUDA_LIBRARIES} ${NCCL_LIBRARIES} ${MPI_CXX_LIBRARIES})
+target_link_libraries(ncclprobe globalstatus ${CUDA_LIBRARIES} ${NCCL_LIBRARIES} ${MPI_CXX_LIBRARIES})
 
 ## The allreduce test program
 add_executable(test test.cu)

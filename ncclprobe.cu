@@ -2,53 +2,28 @@
 #include <cuda_runtime.h>
 #include <nccl.h>
 #include <iostream>
-#include <dlfcn.h>
 #include <chrono>
 #include <unistd.h>
+#include <cuda.h>
+#include <cuda_runtime.h>
 #include <memory>
 #include "shm_storage.hpp"
 #include "config.hpp"
-
-
+#include "global_status.hpp"
 using namespace std::chrono;
+
+
+#define RECORD_TOO_SMALL(count) ((count) < MIN_RECORD_OP_SIZE)
 static bool probe_inited = false;
-static void* nccl_lib_handle = nullptr;
-static auto start_time = system_clock::now();
-static NcclNumber last_call_id = NcclNumber::INVALID;
-static uint64_t repeated_call_num = 0;
-static uint64_t accumulated_count = 0;
-static float accumulated_duration = 0.0;
-std::shared_ptr<NcclRecordStorage> storage_buffer = nullptr;
-
-#define EVENT_RECORD_START\
-    cudaEvent_t start, stop;\
-    cudaEventCreate(&start);\
-    cudaEventCreate(&stop);\
-    cudaEventRecord(start, stream);
-
-#define EVENT_RECORD_END\
-    cudaEventRecord(stop);\
-    cudaEventSynchronize(stop);\
-    cudaEventElapsedTime(&duration_ms, start, stop);
+static GlobalStatus g_status;
 
 
-bool init_probe(){
-    char* ncclPath = getenv("NCCL_PATH");
-    if (!ncclPath) ncclPath = (char*)"/usr/lib/x86_64-linux-gnu/libnccl.so.2";
-    void* handle = dlopen(ncclPath, RTLD_LAZY);
-    if (!handle) {
-        std::cerr << "Error: " << dlerror() << std::endl;
-        return false;
-    }
-    dlerror();
-    nccl_lib_handle = handle;
+static bool init_probe()
+{
+    g_status.initialize(getenv("NCCL_PATH"));
     probe_inited = true;
-    std::cout << Record::numFields() << std::endl;
-    storage_buffer = std::shared_ptr<NcclRecordStorage>(
-        new NcclRecordStorage(Record::numFields(), BUFFER_SIZE));
     return true;
 }
-
 
 ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
                        ncclDataType_t datatype, ncclComm_t comm,
@@ -57,18 +32,11 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
 {
     int dev_id = -1, caller = -1, numdevs = -1;
     char pcistr[PCI_STR_LEN] = {0};
-    auto call_time = (double)(duration_cast<microseconds>(system_clock::now() - start_time).count()); 
-    uint64_t comm_devices[MAX_DEVS];
+    auto call_time = 0.0;
 
     // skip operations with very small size (<1K)
-    if (count < 1024)
+    if (RECORD_TOO_SMALL(count))
         return ncclSuccess;
-    
-    memset(comm_devices, 0, sizeof(comm_devices));
-    cudaGetDevice(&dev_id);
-    cudaDeviceGetPCIBusId(pcistr, PCI_STR_LEN, dev_id);
-    ncclCommUserRank(comm, &caller);
-    ncclCommCount(comm, &numdevs);
     
     /* Special Note! For tensor parallelism (TP), there are too many alternative
     ALLGATHER and REDUCE_SCATTER calls, with each of them has a small size, the
@@ -83,28 +51,29 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
     if (can_compress(number))
     {
         // If this call is AllGather or ReduceScatter (special operators in TP)
-        repeated_call_num++;
-        accumulated_count += count;
-        accumulated_duration += duration;
-        last_call_id = number;
+        g_status.update_accumulation(number, count, duration);
         return ncclSuccess;
     }
-    else if (can_compress(last_call_id) && (!can_compress(number))) 
+
+    call_time = g_status.time_since_initialize();
+    cudaGetDevice(&dev_id);
+    cudaDeviceGetPCIBusId(pcistr, PCI_STR_LEN, dev_id);
+    ncclCommUserRank(comm, &caller);
+    ncclCommCount(comm, &numdevs);
+
+    if (can_compress(g_status.last_call_id) && (!can_compress(number))) 
     {
         // the previous call is, but the current is not
         // we should first add this compressed record to the buffer
         Record compressed_record(
-            repeated_call_num, accumulated_count, reinterpret_cast<uint64_t>(buff1),
-            reinterpret_cast<uint64_t>(buff2), (uint64_t)(datatype),
-            (uint64_t)(getpid()), (uint64_t)(call_time), (uint64_t)(dev_id),
-            (uint64_t)(caller), aux, (uint64_t)(accumulated_duration * 1000 * 1000),
-            (uint64_t)(numdevs)
+            g_status.repeated_call_num, g_status.accumulated_count, 
+            reinterpret_cast<uint64_t>(buff1), reinterpret_cast<uint64_t>(buff2),
+            (uint64_t)(datatype), (uint64_t)(getpid()), (uint64_t)(call_time),
+            (uint64_t)(dev_id), (uint64_t)(caller), aux, 
+            (uint64_t)(g_status.accumulated_duration * 1000 * 1000), (uint64_t)(numdevs)
         );
-        storage_buffer->addRecord(compressed_record.toVector());
-        repeated_call_num = 0;
-        accumulated_count = 0;
-        accumulated_duration = 0.0;
-        last_call_id = number;
+        g_status.storage_buffer->addRecord(compressed_record.toVector());
+        g_status.reset_accumulation(number);
     }
 
     Record record(
@@ -114,7 +83,7 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
         (uint64_t)(caller), aux, (uint64_t)(duration * 1000 * 1000),
         (uint64_t)(numdevs)
     );
-    storage_buffer->addRecord(record.toVector());
+    g_status.storage_buffer->addRecord(record.toVector());
     return ncclSuccess;
 }
 
@@ -125,13 +94,11 @@ ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatyp
     if (!probe_inited)
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclSend);
-    auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclSend"));
+    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclSend"));
     float duration_ms = 0;
 
-    EVENT_RECORD_START
+    g_status.add_timing_event(NcclNumber::SEND, count, stream);
     auto ret = (*real_func)(sendbuff, count, datatype, peer, comm, stream);
-    EVENT_RECORD_END
-
     log_event(sendbuff, nullptr, count, datatype, comm, stream, NcclNumber::SEND, (uint64_t)peer, duration_ms);
     return ret;
 }
@@ -143,13 +110,11 @@ ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype,
     if (!probe_inited)
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclRecv);
-    auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclRecv"));
+    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclRecv"));
     float duration_ms = 0;
 
-    EVENT_RECORD_START
+    g_status.add_timing_event(NcclNumber::RECV, count, stream);
     auto ret = (*real_func)(recvbuff, count, datatype, peer, comm, stream);
-    EVENT_RECORD_END
-
     log_event(nullptr, recvbuff, count, datatype, comm, stream, NcclNumber::RECV, (uint64_t)peer, duration_ms);
     return ret;
 }
@@ -161,13 +126,11 @@ ncclResult_t ncclBcast(void* buff, size_t count, ncclDataType_t datatype,
     if (!probe_inited)
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclBcast);
-    auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclBcast"));
+    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclBcast"));
     float duration_ms = 0;
 
-    EVENT_RECORD_START
+    g_status.add_timing_event(NcclNumber::BCAST, count, stream);
     auto ret = (*real_func)(buff, count, datatype, root, comm, stream);
-    EVENT_RECORD_END
-
     log_event(buff, nullptr, count, datatype, comm, stream, NcclNumber::BCAST, (uint64_t)root, duration_ms);
     return ret;
 }
@@ -180,51 +143,45 @@ ncclResult_t ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count,
     if (!probe_inited)
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclBroadcast);
-    auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclBroadcast"));
+    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclBroadcast"));
     float duration_ms = 0;
 
-    EVENT_RECORD_START
+    g_status.add_timing_event(NcclNumber::BROADCAST, count, stream);
     auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, root, comm, stream);
-    EVENT_RECORD_END
-
     log_event(sendbuff, recvbuff, count, datatype, comm, stream, NcclNumber::BROADCAST, (uint64_t)root, duration_ms);
     return ret;
 }
 
 
-ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcount,
+ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t count,
                            ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream)
 {
     if (!probe_inited)
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclAllGather);
-    auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclAllGather"));
+    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclAllGather"));
     float duration_ms = 0;
 
-    EVENT_RECORD_START
-    auto ret = (*real_func)(sendbuff, recvbuff, sendcount, datatype, comm, stream);
-    EVENT_RECORD_END
-
-    log_event(sendbuff, recvbuff, sendcount, datatype, comm, stream, NcclNumber::ALL_GATHER, (uint64_t)0, duration_ms);
+    g_status.add_timing_event(NcclNumber::ALL_GATHER, count, stream);
+    auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, comm, stream);
+    log_event(sendbuff, recvbuff, count, datatype, comm, stream, NcclNumber::ALL_GATHER, (uint64_t)0, duration_ms);
     return ret;
 }
 
 
-ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff, size_t recvcount,
+ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff, size_t count,
                                ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm,
                                cudaStream_t stream)
 {
     if (!probe_inited)
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclReduceScatter);
-    auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclReduceScatter"));
+    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclReduceScatter"));
     float duration_ms = 0;
 
-    EVENT_RECORD_START
-    auto ret = (*real_func)(sendbuff, recvbuff, recvcount, datatype, op, comm, stream);
-    EVENT_RECORD_END
-
-    log_event(sendbuff, recvbuff, recvcount, datatype, comm, stream, NcclNumber::REDUCE_SCATTER, (uint64_t)op, duration_ms);
+    g_status.add_timing_event(NcclNumber::REDUCE_SCATTER, count, stream);
+    auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, op, comm, stream);
+    log_event(sendbuff, recvbuff, count, datatype, comm, stream, NcclNumber::REDUCE_SCATTER, (uint64_t)op, duration_ms);
     return ret;
 }
 
@@ -236,13 +193,40 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
     if (!probe_inited)
         if (!init_probe()) exit(1);
     using func_t = typeof(ncclAllReduce);
-    auto real_func = reinterpret_cast<func_t*>(dlsym(nccl_lib_handle, "ncclAllReduce"));
+    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclAllReduce"));
     float duration_ms = 0;
 
-    EVENT_RECORD_START
+    g_status.add_timing_event(NcclNumber::ALL_REDUCE, count, stream);
     auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, op, comm, stream);
-    EVENT_RECORD_END
-
     log_event(sendbuff, recvbuff, count, datatype, comm, stream, NcclNumber::ALL_REDUCE, (uint64_t)op, duration_ms);
+    return ret;
+}
+
+
+ncclResult_t ncclGroupStart()
+{
+    if (!probe_inited)
+        if (!init_probe()) exit(1);
+    using func_t = typeof(ncclGroupStart);
+    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclGroupStart"));
+    // When a new group starts, we reset its events to empty.
+    g_status.reset_group_events();
+    return (*real_func)();
+}
+
+
+ncclResult_t ncclGroupEnd()
+{
+    if (!probe_inited)
+        if (!init_probe()) exit(1);
+    using func_t = typeof(ncclGroupEnd);
+    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclGroupEnd"));
+
+    auto ret = (*real_func)();
+    double t = g_status.get_communication_time();
+    // if (!FLOAT_EQ(t, -1.0)){
+    //     printf("Op: %s, time: %lf\n", ToString(g_status.event_op), t);
+    // }
+
     return ret;
 }

@@ -45,3 +45,8 @@ DEFINE_ENUM_WITH_STRING_CONVERSIONS(
 #define BUFFER_MAGIC 0xdeadbeef
 // max capacity of the buffer
 #define BUFFER_SIZE 20000
+// minimal record operation size
+#define MIN_RECORD_OP_SIZE 1024
+
+// floating point comparison
+#define FLOAT_EQ(a, b) (fabs((a) - (b)) < 1e-4)

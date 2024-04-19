@@ -176,7 +176,10 @@ def find_communication(record: NcclRecord):
             if i + period >= len(per_gpu_record):
                 continue
             durations = per_gpu_record['duration'][i:i+period].to_numpy()
+            counts = per_gpu_record['count'][i:i+period].to_numpy()
             t_comm = np.sum(durations.astype(np.float64) / 1000.0)
+            ops = per_gpu_record['call_number'][i:i+period].to_numpy()
+            print(ops, counts, durations)
             comm_duration.append(t_comm)
             iter_start.append(call_time[i])
         comm_duration = np.array(comm_duration)
@@ -184,7 +187,7 @@ def find_communication(record: NcclRecord):
 
         axs[gpu_id].scatter(iter_start, comm_duration, c=colors[gpu_id])
         axs[gpu_id].set_ylim(0, 70)
-        print(gpu_id, np.mean(comm_duration), np.std(comm_duration), comm_duration)
+        # print(gpu_id, np.mean(comm_duration), np.std(comm_duration), comm_duration)
     plt.tight_layout()
     plt.savefig("figs/comm.png")
 
