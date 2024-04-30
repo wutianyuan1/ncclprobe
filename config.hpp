@@ -50,3 +50,6 @@ DEFINE_ENUM_WITH_STRING_CONVERSIONS(
 
 // floating point comparison
 #define FLOAT_EQ(a, b) (fabs((a) - (b)) < 1e-4)
+
+// max number of communicators in a single rank
+#define MAX_COMMS_PER_RANK 128

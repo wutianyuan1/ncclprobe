@@ -6,8 +6,12 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <dlfcn.h>
+#include <boost/log/trivial.hpp>
+#include <boost/log/core.hpp>
+#include <boost/log/expressions.hpp>
 #include "config.hpp"
 #include "shm_storage.hpp"
+#include "shm_topo.hpp"
 
 using namespace std::chrono;
 
@@ -19,6 +23,9 @@ struct GlobalStatus {
 
     // storage buffer on shared memory
     std::shared_ptr<NcclRecordStorage> storage_buffer;
+
+    // Topo links between GPUs
+    std::shared_ptr<NcclTopoConnection> topo_buffer;
 
     // timing utils
     cudaEvent_t group_op_start, group_op_stop;

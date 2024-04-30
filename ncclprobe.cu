@@ -4,15 +4,16 @@
 #include <iostream>
 #include <chrono>
 #include <unistd.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
 #include <memory>
+#include <boost/log/trivial.hpp>
+
 #include "shm_storage.hpp"
 #include "config.hpp"
 #include "global_status.hpp"
+#include "comm.hpp"
+
+
 using namespace std::chrono;
-
-
 #define RECORD_TOO_SMALL(count) ((count) < MIN_RECORD_OP_SIZE)
 static bool probe_inited = false;
 static GlobalStatus g_status;
@@ -36,6 +37,9 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
     // skip operations with very small size (<1K)
     if (RECORD_TOO_SMALL(count))
         return ncclSuccess;
+
+     // !! TODO: update it
+    get_comm(comm, g_status.topo_buffer);
     
     /* Special Note! For tensor parallelism (TP), there are too many alternative
     ALLGATHER and REDUCE_SCATTER calls, with each of them has a small size, the
@@ -85,6 +89,7 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
     );
     g_status.tmp_record_buffer.push_back(record);
     // g_status.storage_buffer->addRecord(record.toVector());
+
     return ncclSuccess;
 }
 
@@ -222,10 +227,10 @@ ncclResult_t ncclGroupEnd()
     {
         for (auto& rec: g_status.tmp_record_buffer)
         {
-            rec.duration = (uint64_t)(t * 1000);
+            rec.duration = (uint64_t)t;
             g_status.storage_buffer->addRecord(rec.toVector());
         }
-        // printf("Op: %s, time: %lf\n", ToString(g_status.event_op), t);
+        BOOST_LOG_TRIVIAL(info) << "Op: " << ToString(g_status.event_op) << ", time: " <<  t << "us";
     }
     g_status.tmp_record_buffer.clear();
     return ret;

@@ -1,7 +1,9 @@
 #include "global_status.hpp"
+
 #ifndef RECORD_TOO_SMALL
     #define RECORD_TOO_SMALL(count) ((count) < MIN_RECORD_OP_SIZE)
 #endif
+
 
 GlobalStatus::GlobalStatus(const char* nccl_path_)
     : nccl_lib_handle(nullptr), storage_buffer(nullptr)
@@ -11,6 +13,12 @@ GlobalStatus::GlobalStatus(const char* nccl_path_)
 
 void GlobalStatus::initialize(const char* nccl_path_)
 {
+    // Initialize logging system
+    boost::log::core::get()->set_filter
+    (
+        boost::log::trivial::severity >= boost::log::trivial::info
+    );
+
     // First, find & load the NCCL dynamic lib
     if (nccl_path_ == nullptr)
         this->nccl_lib_path = std::string("/usr/lib/x86_64-linux-gnu/libnccl.so.2");
@@ -24,11 +32,18 @@ void GlobalStatus::initialize(const char* nccl_path_)
     dlerror();
     this->nccl_lib_handle = handle;
 
-    // Second, create the shared memory storage buffer
+    // Second, create the shared memory storage buffer and topological buffer
     this->storage_buffer = std::shared_ptr<NcclRecordStorage>(
         new NcclRecordStorage(Record::numFields(), BUFFER_SIZE));
-    if (std::atoi(getenv("RANK")) == 0)
-        std::cout << "The buffer contains " << Record::numFields() << " fields." << std::endl;
+
+    this->topo_buffer =  std::shared_ptr<NcclTopoConnection>(
+        new NcclTopoConnection(4)  //!!replace to correct n_ranks
+    );
+
+    char* rank_str = getenv("RANK"), *mpi_rank_str = getenv("OMPI_COMM_WORLD_RANK");
+    char* real_rank_str = rank_str ? rank_str : mpi_rank_str;
+    if (std::atoi(real_rank_str) == 0)
+        BOOST_LOG_TRIVIAL(info) << "The buffer contains " << Record::numFields() << " fields." << std::endl;
 
     // Third, initialize event timing utils
     this->group_op_start = nullptr;
@@ -48,7 +63,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
     // Finally, initialize the start running time
     start_time = system_clock::now();
 
-    std::cout << "Global Status initialized!!" << std::endl;
+    BOOST_LOG_TRIVIAL(info) << "Rank: " << real_rank_str << ", global Status initialized!!" << std::endl;
 }
 
 void GlobalStatus::reset_accumulation(NcclNumber last_call_number)

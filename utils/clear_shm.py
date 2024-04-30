@@ -15,3 +15,10 @@ try:
     shm.unlink()
 except FileNotFoundError:
     print("No lock")
+
+try:
+    shm = shared_memory.SharedMemory("ncclTopo", create=False)
+    shm.close()
+    shm.unlink()
+except FileNotFoundError:
+    print("No Topo")
