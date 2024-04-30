@@ -131,10 +131,12 @@ int main(int argc, char* argv[])
   //multiple devices per thread/process
   NCCLCHECK(ncclGroupStart());
   for (int i=0; i<nDev; i++)
-     NCCLCHECK(ncclAllReduce((const void*)sendbuff[i], (void*)recvbuff[i], size, ncclFloat, ncclSum,
-           comms[i], s[i]));
+     ncclAllReduce((const void*)sendbuff[i], (void*)recvbuff[i], size, ncclFloat, ncclSum, comms[i], s[i]);
   NCCLCHECK(ncclGroupEnd());
- 
+  
+  auto x = comms[0];
+  int* sbcast = reinterpret_cast<int*>(x);
+  // struct ncclComm xx = *x;
  
   //synchronizing on CUDA stream to complete NCCL communication
   for (int i=0; i<nDev; i++)

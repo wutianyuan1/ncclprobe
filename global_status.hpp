@@ -35,6 +35,9 @@ struct GlobalStatus {
     // Running time since training starts
     system_clock::time_point start_time;
 
+    // Temporary record buffer
+    std::vector<Record> tmp_record_buffer;
+
 public:
     GlobalStatus() = default;
     GlobalStatus(const char* nccl_path_);
@@ -52,7 +55,7 @@ public:
     void reset_group_events();
 
     // Updates the TP accumulated calls (AllGather, ReduceScatter)
-    void update_accumulation(NcclNumber last_call_number, uint64_t count, float duration);
+    void update_accumulation(NcclNumber last_call_number, uint64_t count);
 
     // Resets the TP accumulated calls (AllGather, ReduceScatter)
     void reset_accumulation(NcclNumber last_call_number);

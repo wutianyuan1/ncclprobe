@@ -59,12 +59,11 @@ void GlobalStatus::reset_accumulation(NcclNumber last_call_number)
     last_call_id = last_call_number;
 }
 
-void GlobalStatus::update_accumulation(NcclNumber last_call_number, uint64_t count, float duration)
+void GlobalStatus::update_accumulation(NcclNumber last_call_number, uint64_t count)
 {
     repeated_call_num++;
     last_call_id = last_call_number;
     accumulated_count += count;
-    accumulated_duration += duration;
 }
 
 void* GlobalStatus::get_function_ptr(const char* func_name)
@@ -90,10 +89,13 @@ void GlobalStatus::add_timing_event(NcclNumber op, uint64_t count, cudaStream_t 
     if (RECORD_TOO_SMALL(count))
         return;
     // Else, record it
-    has_events_in_group = true;
     event_op = op;
-    cudaEventRecord(group_op_start, stream);
-    curr_stream = stream;   
+    // avoid repeat recording
+    if (!has_events_in_group) {
+        cudaEventRecord(group_op_start, stream);
+        has_events_in_group = true;
+        curr_stream = stream;  
+    }
 }
 
 double GlobalStatus::get_communication_time()
