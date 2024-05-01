@@ -3,27 +3,16 @@
 using namespace boost::interprocess;
 
 
-uint64_t hash_comm(uint64_t addr, int rank)
-{
-    uint64_t hashcode = 23;
-    hashcode = (hashcode * 37) + addr;
-    hashcode = (hashcode * 37) + rank;
-    return hashcode;
-}
-
-
 Communicator::Communicator(uint64_t addr, int my_rank, uint64_t num_channels_) 
-    : num_channels(num_channels_), last_ring_id(0), last_tree_id(0), comm_addr(addr), rank(my_rank)
-{
-    this->rings = new ncclRing[num_channels];
-    this->trees = new ncclTree[num_channels];
-}
+    : num_channels(num_channels_), last_ring_id(0), last_tree_id(0), comm_addr(addr), global_rank(my_rank)
+{}
+
+Communicator::Communicator() 
+    : num_channels(0), last_ring_id(0), last_tree_id(0), comm_addr(0), global_rank(0)
+{}
 
 Communicator::~Communicator()
-{
-    if (rings) delete[] rings;
-    if (trees) delete[] trees;
-}
+{}
 
 void Communicator::add_ring(ncclRing& ring)
 {
@@ -41,7 +30,7 @@ void Communicator::debug_print()
 {
     std::stringstream ss;
     ss << "<GPU Connection Info>\n"
-        << "  Rank:" << rank << ", #channels: " << num_channels;
+        << "  Global Rank:" << global_rank << ", Group Rank: " << group_rank << ", Local Rank: " << local_rank << ", #channels: " << num_channels;
     for (int i = 0; i < num_channels; i++)
         ss << "  channel[" << i << "]:\n"
             << "    (Ring id=" << rings[i].index << ", prev=" << rings[i].prev << ", next=" << rings[i].next << ")\n"
@@ -66,18 +55,24 @@ NcclTopoConnection::~NcclTopoConnection()
 }
 
 
-void NcclTopoConnection::add_comm(Communicator& comm)
+bool NcclTopoConnection::add_comm(Communicator& comm)
 {
-    uint64_t hash = hash_comm(comm.comm_addr, comm.rank);
+    if (this->find(comm.comm_addr))
+    {
+        BOOST_LOG_TRIVIAL(info) << "Communicator " << comm.comm_addr << "is found in cache, will not be repeatly added";
+        return false;
+    }
     memcpy(&all_comms[*n_comms_ptr], &comm, sizeof(Communicator));
-    comm_map.insert({hash, *n_comms_ptr});
+    memcpy(all_comms[*n_comms_ptr].rings, comm.rings, sizeof(ncclRing) * comm.num_channels);
+    memcpy(all_comms[*n_comms_ptr].trees, comm.trees, sizeof(ncclTree) * comm.num_channels);
+    comm_map.insert({comm.comm_addr, *n_comms_ptr});
     (*n_comms_ptr)++;
+    return true;
 }
 
-Communicator* NcclTopoConnection::find(uint64_t comm_addr, int rank)
+Communicator* NcclTopoConnection::find(uint64_t comm_addr)
 {
-    uint64_t hash = hash_comm(comm_addr, rank);
-    auto iter = comm_map.find(hash);
+    auto iter = comm_map.find(comm_addr);
     return iter == comm_map.end() ? nullptr : &all_comms[iter->second];
 }
 

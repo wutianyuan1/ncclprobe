@@ -13,11 +13,14 @@ struct Communicator
     uint64_t num_channels;
     uint64_t last_ring_id, last_tree_id;
     uint64_t comm_addr;
-    int rank;
-    ncclRing* rings;
-    ncclTree* trees;
+    int global_rank;
+    int local_rank;
+    int group_rank;
+    ncclRing rings[MAXCHANNELS];
+    ncclTree trees[MAXCHANNELS];
     int comm_ops[NCCL_NUM_FUNCTIONS];
 public:
+    Communicator();
     Communicator(uint64_t addr, int my_rank, uint64_t num_channels);
     ~Communicator();
     void add_ring(ncclRing& ring);
@@ -25,7 +28,6 @@ public:
     void debug_print();
 };
 
-uint64_t hash_comm(uint64_t addr, int rank);
 
 class NcclTopoConnection
 {
@@ -37,7 +39,7 @@ class NcclTopoConnection
 public:
     NcclTopoConnection(int n_ranks);
     ~NcclTopoConnection();
-    void add_comm(Communicator& comm);
-    Communicator* find(uint64_t comm_addr, int rank);
+    bool add_comm(Communicator& comm);
+    Communicator* find(uint64_t comm_addr);
     uint64_t num_comms() const;
 };

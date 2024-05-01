@@ -48,6 +48,10 @@ static uint64_t getHostHash(const char* string) {
   return result;
 }
 
+static uint64_t getIDHash(const char* ID) {
+  return getHostHash(ID);
+}
+
 
 static void getHostName(char* hostname, int maxlen) {
   gethostname(hostname, maxlen);
@@ -60,17 +64,24 @@ static void getHostName(char* hostname, int maxlen) {
 }
 
 
+__global__ void fillBuffer(float *buf, int value, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        buf[idx] = value;
+    }
+}
+
+
+
 int main(int argc, char* argv[])
 {
-  int size = 32*1024*1024;
+  int size = 16;
   int myRank, nRanks, localRank = 0;
-
 
   //initializing MPI
   MPICHECK(MPI_Init(&argc, &argv));
   MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
   MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &nRanks));
-
 
   //calculating localRank based on hostname which is used in selecting a GPU
   uint64_t hostHashs[nRanks];
@@ -82,50 +93,70 @@ int main(int argc, char* argv[])
      if (p == myRank) break;
      if (hostHashs[p] == hostHashs[myRank]) localRank++;
   }
+  printf("[Rank %d] localRank=%d\n", myRank, localRank);
 
+  // Define groups
+  int group = myRank / 2; // This will be 0 for ranks 0,1 and 1 for ranks 2,3
+
+  // Create MPI sub-communicators based on groups
+  MPI_Comm subComm;
+  MPICHECK(MPI_Comm_split(MPI_COMM_WORLD, group, myRank, &subComm));
+
+  int subRank, subSize;
+  MPICHECK(MPI_Comm_rank(subComm, &subRank));
+  MPICHECK(MPI_Comm_size(subComm, &subSize));
 
   ncclUniqueId id;
   ncclComm_t comm;
   float *sendbuff, *recvbuff;
   cudaStream_t s;
-  //get NCCL unique ID at rank 0 and broadcast it to all others
-  if (myRank == 0) ncclGetUniqueId(&id);
-  MPICHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
 
+  // Get NCCL unique ID at sub-communicator rank 0 and broadcast it to all others in the sub-communicator
+  if (subRank == 0) ncclGetUniqueId(&id);
+  MPICHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, subComm));
+  printf("[Rank %d], subRank=%d, subSize=%d, unique ID=%lu\n", myRank, subRank, subSize, getIDHash(id.internal));
 
-  //picking a GPU based on localRank, allocate device buffers
+  // Picking a GPU based on localRank, allocate device buffers
   CUDACHECK(cudaSetDevice(localRank));
   CUDACHECK(cudaMalloc(&sendbuff, size * sizeof(float)));
   CUDACHECK(cudaMalloc(&recvbuff, size * sizeof(float)));
   CUDACHECK(cudaStreamCreate(&s));
 
+  int threadsPerBlock = 256;
+  int blocksPerGrid = (size + threadsPerBlock - 1) / threadsPerBlock;
+  fillBuffer<<<blocksPerGrid, threadsPerBlock, 0, s>>>(sendbuff, myRank, size);
+  CUDACHECK(cudaStreamSynchronize(s));
 
-  //initializing NCCL
-  NCCLCHECK(ncclCommInitRank(&comm, nRanks, id, myRank));
+  // Initializing NCCL with sub-communicator
+  NCCLCHECK(ncclCommInitRank(&comm, subSize, id, subRank));
 
-  //communicating using NCCL
+  // Communicating using NCCL within sub-communicators
   for (int i = 0; i < N_REPEAT; i++) {
     NCCLCHECK(ncclGroupStart());
-    NCCLCHECK(ncclAllReduce((const void*)sendbuff, (void*)recvbuff, size, ncclFloat, ncclSum, comm, s));
+    NCCLCHECK(ncclAllReduce((const void*)sendbuff, (void*)recvbuff, size, ncclFloat, ncclAvg, comm, s));
     NCCLCHECK(ncclGroupEnd());    
   }
 
-  //completing NCCL operation by synchronizing on the CUDA stream
+  // Completing NCCL operation by synchronizing on the CUDA stream
   CUDACHECK(cudaStreamSynchronize(s));
 
+  float* cpubuff = (float*)malloc(sizeof(float) * size);
+  cudaMemcpy(cpubuff, recvbuff, sizeof(float)*size, cudaMemcpyDeviceToHost);
+  cudaDeviceSynchronize();
+  printf("[Rank %d]: result=%f\n", myRank, cpubuff[0]);
 
-  //free device buffers
+  // Free device buffers
   CUDACHECK(cudaFree(sendbuff));
   CUDACHECK(cudaFree(recvbuff));
 
-
-  //finalizing NCCL
+  // Finalizing NCCL
   ncclCommDestroy(comm);
 
+  // Finalizing MPI sub-communicator
+  MPICHECK(MPI_Comm_free(&subComm));
 
-  //finalizing MPI
+  // Finalizing MPI
   MPICHECK(MPI_Finalize());
-
 
   printf("[MPI Rank %d] Success \n", myRank);
   return 0;

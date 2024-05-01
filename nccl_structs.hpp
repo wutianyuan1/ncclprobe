@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
 #include <cstdlib>
+#include <sched.h>
+#include <unistd.h>
 #include "config.hpp"
 
 #define MAXCHANNELS 32

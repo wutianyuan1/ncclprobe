@@ -39,6 +39,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
     this->topo_buffer =  std::shared_ptr<NcclTopoConnection>(
         new NcclTopoConnection(4)  //!!replace to correct n_ranks
     );
+    this->comm_in_group = nullptr;
 
     char* rank_str = getenv("RANK"), *mpi_rank_str = getenv("OMPI_COMM_WORLD_RANK");
     char* real_rank_str = rank_str ? rank_str : mpi_rank_str;

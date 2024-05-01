@@ -4,6 +4,7 @@
 #include <iostream>
 #include <exception>
 #include <cuda.h>
+#include <nccl.h>
 #include <cuda_runtime.h>
 #include <dlfcn.h>
 #include <boost/log/trivial.hpp>
@@ -26,6 +27,7 @@ struct GlobalStatus {
 
     // Topo links between GPUs
     std::shared_ptr<NcclTopoConnection> topo_buffer;
+    ncclComm_t comm_in_group;
 
     // timing utils
     cudaEvent_t group_op_start, group_op_stop;

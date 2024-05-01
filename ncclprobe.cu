@@ -12,18 +12,32 @@
 #include "global_status.hpp"
 #include "comm.hpp"
 
-
-using namespace std::chrono;
 #define RECORD_TOO_SMALL(count) ((count) < MIN_RECORD_OP_SIZE)
-static bool probe_inited = false;
+
+#define RETRIEVE_NCCL_FUNC(func_name)\
+    using func_t = typeof(func_name);\
+    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr(#func_name));
+
+static bool sys_inited = false;
 static GlobalStatus g_status;
 
+using namespace std::chrono;
 
-static bool init_probe()
+
+static void detect_sys_init()
 {
+    if (sys_inited)
+        return;
     g_status.initialize(getenv("NCCL_PATH"));
-    probe_inited = true;
-    return true;
+    sys_inited = true;
+}
+
+static ncclResult_t log_communicator(std::shared_ptr<NcclTopoConnection> comm_cache, ncclComm_t hidden_comm) 
+{
+    Communicator parsed_comm;
+    parse_communicator(hidden_comm, &parsed_comm);
+    comm_cache->add_comm(parsed_comm);
+    return ncclSuccess;
 }
 
 ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
@@ -38,9 +52,6 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
     if (RECORD_TOO_SMALL(count))
         return ncclSuccess;
 
-     // !! TODO: update it
-    get_comm(comm, g_status.topo_buffer);
-    
     /* Special Note! For tensor parallelism (TP), there are too many alternative
     ALLGATHER and REDUCE_SCATTER calls, with each of them has a small size, the
     interval between these calls are very short, and recording all of them will
@@ -94,13 +105,51 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
 }
 
 
+ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank)
+{
+    // initialize the detection system if it is not yet inited.
+    detect_sys_init();
+
+    // Logging & forward the function call
+    RETRIEVE_NCCL_FUNC(ncclCommInitRank);
+
+    auto ret = (*real_func)(comm, nranks, commId, rank);
+    g_status.comm_in_group = *comm;
+    BOOST_LOG_TRIVIAL(info) << "[ncclCommInitRank] nranks=" << nranks << ", rank=" << rank;
+    return ret;
+}
+
+
+ncclResult_t ncclCommInitRankConfig(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank, ncclConfig_t* config)
+{
+    // initialize the detection system if it is not yet inited.
+    detect_sys_init();
+
+    // Logging & forward the function call
+    RETRIEVE_NCCL_FUNC(ncclCommInitRankConfig);
+
+    auto ret = (*real_func)(comm, nranks, commId, rank, config);
+    g_status.comm_in_group = *comm;
+    BOOST_LOG_TRIVIAL(info) << "[ncclCommInitRankConfig] nranks=" << nranks << ", rank=" << rank;
+    return ret;
+}
+
+ncclResult_t ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config)
+{
+    RETRIEVE_NCCL_FUNC(ncclCommSplit);
+
+    auto ret = (*real_func)(comm, color, key, newcomm, config);
+    // The original `comm' was already added to the buffer, so we only need to log the new comm.
+    g_status.comm_in_group = *newcomm;
+    BOOST_LOG_TRIVIAL(info) << "[ncclCommSplit] color=" << color << ", key=" << key;
+    return ret;
+}
+
+
 ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype,
                       int peer, ncclComm_t comm, cudaStream_t stream)
 {
-    if (!probe_inited)
-        if (!init_probe()) exit(1);
-    using func_t = typeof(ncclSend);
-    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclSend"));
+    RETRIEVE_NCCL_FUNC(ncclSend);
 
     g_status.add_timing_event(NcclNumber::SEND, count, stream);
     auto ret = (*real_func)(sendbuff, count, datatype, peer, comm, stream);
@@ -112,10 +161,7 @@ ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatyp
 ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype,
                       int peer, ncclComm_t comm, cudaStream_t stream)
 {
-    if (!probe_inited)
-        if (!init_probe()) exit(1);
-    using func_t = typeof(ncclRecv);
-    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclRecv"));
+    RETRIEVE_NCCL_FUNC(ncclRecv);
 
     g_status.add_timing_event(NcclNumber::RECV, count, stream);
     auto ret = (*real_func)(recvbuff, count, datatype, peer, comm, stream);
@@ -127,10 +173,7 @@ ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype,
 ncclResult_t ncclBcast(void* buff, size_t count, ncclDataType_t datatype,
                       int root, ncclComm_t comm, cudaStream_t stream)
 {
-    if (!probe_inited)
-        if (!init_probe()) exit(1);
-    using func_t = typeof(ncclBcast);
-    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclBcast"));
+    RETRIEVE_NCCL_FUNC(ncclBcast);
 
     g_status.add_timing_event(NcclNumber::BCAST, count, stream);
     auto ret = (*real_func)(buff, count, datatype, root, comm, stream);
@@ -143,10 +186,7 @@ ncclResult_t ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count,
                            ncclDataType_t datatype, int root,
                            ncclComm_t comm, cudaStream_t stream)
 {
-    if (!probe_inited)
-        if (!init_probe()) exit(1);
-    using func_t = typeof(ncclBroadcast);
-    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclBroadcast"));
+    RETRIEVE_NCCL_FUNC(ncclBroadcast);
 
     g_status.add_timing_event(NcclNumber::BROADCAST, count, stream);
     auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, root, comm, stream);
@@ -158,10 +198,7 @@ ncclResult_t ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count,
 ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t count,
                            ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream)
 {
-    if (!probe_inited)
-        if (!init_probe()) exit(1);
-    using func_t = typeof(ncclAllGather);
-    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclAllGather"));
+    RETRIEVE_NCCL_FUNC(ncclAllGather);
 
     g_status.add_timing_event(NcclNumber::ALL_GATHER, count, stream);
     auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, comm, stream);
@@ -174,10 +211,7 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff, size_t coun
                                ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm,
                                cudaStream_t stream)
 {
-    if (!probe_inited)
-        if (!init_probe()) exit(1);
-    using func_t = typeof(ncclReduceScatter);
-    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclReduceScatter"));
+    RETRIEVE_NCCL_FUNC(ncclReduceScatter);
 
     g_status.add_timing_event(NcclNumber::REDUCE_SCATTER, count, stream);
     auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, op, comm, stream);
@@ -190,10 +224,7 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
                            ncclDataType_t datatype, ncclRedOp_t op,
                            ncclComm_t comm, cudaStream_t stream)
 {
-    if (!probe_inited)
-        if (!init_probe()) exit(1);
-    using func_t = typeof(ncclAllReduce);
-    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclAllReduce"));
+    RETRIEVE_NCCL_FUNC(ncclAllReduce);
 
     g_status.add_timing_event(NcclNumber::ALL_REDUCE, count, stream);
     auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, op, comm, stream);
@@ -204,10 +235,9 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
 
 ncclResult_t ncclGroupStart()
 {
-    if (!probe_inited)
-        if (!init_probe()) exit(1);
-    using func_t = typeof(ncclGroupStart);
-    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclGroupStart"));
+    detect_sys_init();
+    RETRIEVE_NCCL_FUNC(ncclGroupStart);
+
     // When a new group starts, we reset its events to empty.
     g_status.reset_group_events();
     return (*real_func)();
@@ -216,10 +246,7 @@ ncclResult_t ncclGroupStart()
 
 ncclResult_t ncclGroupEnd()
 {
-    if (!probe_inited)
-        if (!init_probe()) exit(1);
-    using func_t = typeof(ncclGroupEnd);
-    auto real_func = reinterpret_cast<func_t*>(g_status.get_function_ptr("ncclGroupEnd"));
+    RETRIEVE_NCCL_FUNC(ncclGroupEnd);
 
     auto ret = (*real_func)();
     double t = g_status.get_communication_time();
@@ -233,5 +260,11 @@ ncclResult_t ncclGroupEnd()
         BOOST_LOG_TRIVIAL(info) << "Op: " << ToString(g_status.event_op) << ", time: " <<  t << "us";
     }
     g_status.tmp_record_buffer.clear();
+
+    if (g_status.comm_in_group != nullptr)
+    {
+        log_communicator(g_status.topo_buffer, g_status.comm_in_group);
+        g_status.comm_in_group = nullptr;
+    }
     return ret;
 }
