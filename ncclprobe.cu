@@ -32,11 +32,27 @@ static void detect_sys_init()
     sys_inited = true;
 }
 
-static ncclResult_t log_communicator(std::shared_ptr<NcclTopoConnection> comm_cache, ncclComm_t hidden_comm) 
+static void get_linked_peers(ncclComm_t comm)
+{
+    std::shared_ptr<Communicator> parsed_comm = g_status.topo_buffer->find(reinterpret_cast<uint64_t>(comm));
+    auto linked_comms = g_status.topo_buffer->find_linked_ranks(parsed_comm);
+    std::stringstream ss;
+    ss << "My global rank: " << parsed_comm->global_rank << ", group rank: " << parsed_comm->group_rank << "; linked comms: ";
+    for (auto& i : linked_comms){
+        ss << "(global: " << i->global_rank << ", group: " << i->group_rank << "), ";
+    }
+    BOOST_LOG_TRIVIAL(info) << ss.str();
+}
+
+static ncclResult_t log_communicator(std::shared_ptr<NcclTopoConnection> comm_cache,
+                                     ncclComm_t hidden_comm, uint64_t comm_nccl_id_hash) 
 {
     Communicator parsed_comm;
     parse_communicator(hidden_comm, &parsed_comm);
+    parsed_comm.id_hash = comm_nccl_id_hash;
+    parsed_comm.debug_print();
     comm_cache->add_comm(parsed_comm);
+    g_status.local_comms.push_back(parsed_comm);
     return ncclSuccess;
 }
 
@@ -115,6 +131,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId,
 
     auto ret = (*real_func)(comm, nranks, commId, rank);
     g_status.comm_in_group = *comm;
+    g_status.comm_nccl_id_hash = hash_nccl_id(commId.internal, NCCL_UNIQUE_ID_BYTES);
     BOOST_LOG_TRIVIAL(info) << "[ncclCommInitRank] nranks=" << nranks << ", rank=" << rank;
     return ret;
 }
@@ -130,6 +147,7 @@ ncclResult_t ncclCommInitRankConfig(ncclComm_t* comm, int nranks, ncclUniqueId c
 
     auto ret = (*real_func)(comm, nranks, commId, rank, config);
     g_status.comm_in_group = *comm;
+    g_status.comm_nccl_id_hash = hash_nccl_id(commId.internal, NCCL_UNIQUE_ID_BYTES);
     BOOST_LOG_TRIVIAL(info) << "[ncclCommInitRankConfig] nranks=" << nranks << ", rank=" << rank;
     return ret;
 }
@@ -226,6 +244,7 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
 {
     RETRIEVE_NCCL_FUNC(ncclAllReduce);
 
+    get_linked_peers(comm);
     g_status.add_timing_event(NcclNumber::ALL_REDUCE, count, stream);
     auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, op, comm, stream);
     log_event(sendbuff, recvbuff, count, datatype, comm, stream, NcclNumber::ALL_REDUCE, (uint64_t)op);
@@ -263,8 +282,10 @@ ncclResult_t ncclGroupEnd()
 
     if (g_status.comm_in_group != nullptr)
     {
-        log_communicator(g_status.topo_buffer, g_status.comm_in_group);
+        log_communicator(g_status.topo_buffer, g_status.comm_in_group, g_status.comm_nccl_id_hash);
         g_status.comm_in_group = nullptr;
+        g_status.comm_nccl_id_hash = 0;
+        
     }
     return ret;
 }

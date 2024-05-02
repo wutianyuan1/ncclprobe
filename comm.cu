@@ -199,5 +199,4 @@ void parse_communicator(ncclComm_t hidden_comm, Communicator* parsed_comm)
       parsed_comm->add_ring(hcomm->channels[i].ring);
       parsed_comm->add_tree(hcomm->channels[i].tree);
     }
-    parsed_comm->debug_print();
 }

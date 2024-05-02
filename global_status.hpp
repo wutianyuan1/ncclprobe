@@ -2,6 +2,7 @@
 #include <chrono>
 #include <memory>
 #include <iostream>
+#include <vector>
 #include <exception>
 #include <cuda.h>
 #include <nccl.h>
@@ -27,7 +28,9 @@ struct GlobalStatus {
 
     // Topo links between GPUs
     std::shared_ptr<NcclTopoConnection> topo_buffer;
+    std::vector<Communicator> local_comms;
     ncclComm_t comm_in_group;
+    uint64_t comm_nccl_id_hash;
 
     // timing utils
     cudaEvent_t group_op_start, group_op_stop;

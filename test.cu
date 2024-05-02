@@ -2,12 +2,14 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <string>
 #include <cuda_runtime.h>
 #include <nccl.h>
 #include <mpi.h>
 
 
-#define N_REPEAT 10
+#define N_REPEAT 1
 
 #define MPICHECK(cmd) do {                          \
   int e = cmd;                                      \
@@ -83,6 +85,10 @@ int main(int argc, char* argv[])
   MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
   MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &nRanks));
 
+  auto rank_str = std::to_string(myRank);
+  setenv("RANK", rank_str.c_str(), 1);
+  setenv("LOCAL_RANK", rank_str.c_str(), 1);
+
   //calculating localRank based on hostname which is used in selecting a GPU
   uint64_t hostHashs[nRanks];
   char hostname[1024];
@@ -96,7 +102,7 @@ int main(int argc, char* argv[])
   printf("[Rank %d] localRank=%d\n", myRank, localRank);
 
   // Define groups
-  int group = myRank / 2; // This will be 0 for ranks 0,1 and 1 for ranks 2,3
+  int group = 0;// myRank / 2; // This will be 0 for ranks 0,1 and 1 for ranks 2,3
 
   // Create MPI sub-communicators based on groups
   MPI_Comm subComm;
@@ -128,7 +134,10 @@ int main(int argc, char* argv[])
   CUDACHECK(cudaStreamSynchronize(s));
 
   // Initializing NCCL with sub-communicator
+  NCCLCHECK(ncclGroupStart());
   NCCLCHECK(ncclCommInitRank(&comm, subSize, id, subRank));
+  NCCLCHECK(ncclGroupEnd());
+  MPI_Barrier(MPI_COMM_WORLD);
 
   // Communicating using NCCL within sub-communicators
   for (int i = 0; i < N_REPEAT; i++) {
