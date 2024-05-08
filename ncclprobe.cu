@@ -11,6 +11,7 @@
 #include "config.hpp"
 #include "global_status.hpp"
 #include "comm.hpp"
+#include "utils.hpp"
 
 #define RECORD_TOO_SMALL(count) ((count) < MIN_RECORD_OP_SIZE)
 
@@ -28,7 +29,7 @@ static void detect_sys_init()
 {
     if (sys_inited)
         return;
-    g_status.initialize(getenv("NCCL_PATH"));
+    g_status.initialize(get_nccl_path("NCCL_PATH"));
     sys_inited = true;
 }
 
@@ -60,9 +61,9 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
                        ncclDataType_t datatype, ncclComm_t comm,
                        cudaStream_t stream, NcclNumber number, uint64_t aux)
 {
-    int dev_id = -1, caller = -1, numdevs = -1;
+    int dev_id = -1, numdevs = 0;
     char pcistr[PCI_STR_LEN] = {0};
-    auto call_time = 0.0;
+    auto call_time = 0.0, call_duration = 0.0;
 
     // skip operations with very small size (<1K)
     if (RECORD_TOO_SMALL(count))
@@ -81,15 +82,13 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
     if (can_compress(number))
     {
         // If this call is AllGather or ReduceScatter (special operators in TP)
-        g_status.update_accumulation(number, count);
+        g_status.update_accumulation(number, count, 0.0f);
         return ncclSuccess;
     }
 
     call_time = g_status.time_since_initialize();
     cudaGetDevice(&dev_id);
     cudaDeviceGetPCIBusId(pcistr, PCI_STR_LEN, dev_id);
-    ncclCommUserRank(comm, &caller);
-    ncclCommCount(comm, &numdevs);
 
     if (can_compress(g_status.last_call_id) && (!can_compress(number))) 
     {
@@ -99,23 +98,32 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
             g_status.repeated_call_num, g_status.accumulated_count, 
             reinterpret_cast<uint64_t>(buff1), reinterpret_cast<uint64_t>(buff2),
             (uint64_t)(datatype), (uint64_t)(getpid()), (uint64_t)(call_time),
-            (uint64_t)(dev_id), (uint64_t)(caller), aux, 
-            (uint64_t)(0) /* empty duration */, (uint64_t)(numdevs)
+            (uint64_t)(dev_id), (uint64_t)(get_rank(DistEngine::auto_find)), aux, 
+            (uint64_t)g_status.accumulated_duration, (uint64_t)(numdevs)
         );
-        g_status.tmp_record_buffer.push_back(compressed_record);
-        // g_status.storage_buffer->addRecord(compressed_record.toVector());
+
+        if (g_status.in_group)  // If we are in a group, just push it into temp buffer, it will be logged after group end.
+            g_status.tmp_record_buffer.push_back(compressed_record);
+        else  // If not in group, write it down to buffer immediately.
+            g_status.storage_buffer->addRecord(compressed_record.toVector());
         g_status.reset_accumulation(number);
     }
+
+    // If this Op is not in group, we should record its execution time here.
+    if (!g_status.in_group)
+        call_duration = g_status.get_communication_time();
 
     Record record(
         (uint64_t)number, count, reinterpret_cast<uint64_t>(buff1),
         reinterpret_cast<uint64_t>(buff2), (uint64_t)(datatype),
         (uint64_t)(getpid()), (uint64_t)(call_time), (uint64_t)(dev_id),
-        (uint64_t)(caller), aux, (uint64_t)(0), // empty duration
+        (uint64_t)(get_rank(DistEngine::auto_find)), aux, (uint64_t)(call_duration),
         (uint64_t)(numdevs)
     );
-    g_status.tmp_record_buffer.push_back(record);
-    // g_status.storage_buffer->addRecord(record.toVector());
+    if (g_status.in_group)  // If we are in a group, just push it into temp buffer, it will be logged after group end.
+        g_status.tmp_record_buffer.push_back(record);
+    else  // If not in group, write it down to buffer immediately.
+        g_status.storage_buffer->addRecord(record.toVector());
 
     return ncclSuccess;
 }
@@ -130,8 +138,14 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId,
     RETRIEVE_NCCL_FUNC(ncclCommInitRank);
 
     auto ret = (*real_func)(comm, nranks, commId, rank);
-    g_status.comm_in_group = *comm;
-    g_status.comm_nccl_id_hash = hash_nccl_id(commId.internal, NCCL_UNIQUE_ID_BYTES);
+    if (g_status.in_group)
+    {
+        g_status.comm_in_group = *comm;
+        g_status.comm_nccl_id_hash = hash_nccl_id(commId.internal, NCCL_UNIQUE_ID_BYTES);
+    } else {
+        log_communicator(g_status.topo_buffer, *comm, hash_nccl_id(commId.internal, NCCL_UNIQUE_ID_BYTES));
+    }
+   
     BOOST_LOG_TRIVIAL(info) << "[ncclCommInitRank] nranks=" << nranks << ", rank=" << rank;
     return ret;
 }
@@ -146,8 +160,13 @@ ncclResult_t ncclCommInitRankConfig(ncclComm_t* comm, int nranks, ncclUniqueId c
     RETRIEVE_NCCL_FUNC(ncclCommInitRankConfig);
 
     auto ret = (*real_func)(comm, nranks, commId, rank, config);
-    g_status.comm_in_group = *comm;
-    g_status.comm_nccl_id_hash = hash_nccl_id(commId.internal, NCCL_UNIQUE_ID_BYTES);
+    if (g_status.in_group)
+    {
+        g_status.comm_in_group = *comm;
+        g_status.comm_nccl_id_hash = hash_nccl_id(commId.internal, NCCL_UNIQUE_ID_BYTES);
+    } else {
+        log_communicator(g_status.topo_buffer, *comm, hash_nccl_id(commId.internal, NCCL_UNIQUE_ID_BYTES));
+    }
     BOOST_LOG_TRIVIAL(info) << "[ncclCommInitRankConfig] nranks=" << nranks << ", rank=" << rank;
     return ret;
 }
@@ -158,7 +177,15 @@ ncclResult_t ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newc
 
     auto ret = (*real_func)(comm, color, key, newcomm, config);
     // The original `comm' was already added to the buffer, so we only need to log the new comm.
-    g_status.comm_in_group = *newcomm;
+    char buf[128];
+    if (g_status.in_group)
+    {
+        g_status.comm_in_group = *newcomm;
+        g_status.comm_nccl_id_hash = hash_nccl_id(buf, NCCL_UNIQUE_ID_BYTES);
+    } else {
+        log_communicator(g_status.topo_buffer, *newcomm, hash_nccl_id(buf, NCCL_UNIQUE_ID_BYTES));
+    }
+    BOOST_LOG_TRIVIAL(warning) << "[ncclCommSplit] getting ncclUniqueID is not supported via split";
     BOOST_LOG_TRIVIAL(info) << "[ncclCommSplit] color=" << color << ", key=" << key;
     return ret;
 }
@@ -244,7 +271,6 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
 {
     RETRIEVE_NCCL_FUNC(ncclAllReduce);
 
-    get_linked_peers(comm);
     g_status.add_timing_event(NcclNumber::ALL_REDUCE, count, stream);
     auto ret = (*real_func)(sendbuff, recvbuff, count, datatype, op, comm, stream);
     log_event(sendbuff, recvbuff, count, datatype, comm, stream, NcclNumber::ALL_REDUCE, (uint64_t)op);
@@ -257,8 +283,8 @@ ncclResult_t ncclGroupStart()
     detect_sys_init();
     RETRIEVE_NCCL_FUNC(ncclGroupStart);
 
-    // When a new group starts, we reset its events to empty.
-    g_status.reset_group_events();
+    // When a new group starts, we reset its events to empty and mark we are in a group.
+    g_status.group_start();
     return (*real_func)();
 }
 
@@ -269,14 +295,24 @@ ncclResult_t ncclGroupEnd()
 
     auto ret = (*real_func)();
     double t = g_status.get_communication_time();
+
     if (!FLOAT_EQ(t, -1.0))
     {
-        for (auto& rec: g_status.tmp_record_buffer)
+        // If this Op can be compressed, just do add it to accumulation
+        if (g_status.event_op == NcclNumber::ALL_GATHER || g_status.event_op == NcclNumber::REDUCE_SCATTER)
         {
-            rec.duration = (uint64_t)t;
-            g_status.storage_buffer->addRecord(rec.toVector());
+            g_status.accumulated_duration += t;
+            return ret;
         }
-        BOOST_LOG_TRIVIAL(info) << "Op: " << ToString(g_status.event_op) << ", time: " <<  t << "us";
+        else {
+            for (auto& rec: g_status.tmp_record_buffer)
+            {
+                if (rec.duration == 0)
+                    rec.duration = (uint64_t)t;
+                g_status.storage_buffer->addRecord(rec.toVector());
+            }
+        }
+        // BOOST_LOG_TRIVIAL(info) << "Op: " << ToString(g_status.event_op) << ", time: " <<  t << "us";
     }
     g_status.tmp_record_buffer.clear();
 
@@ -285,7 +321,8 @@ ncclResult_t ncclGroupEnd()
         log_communicator(g_status.topo_buffer, g_status.comm_in_group, g_status.comm_nccl_id_hash);
         g_status.comm_in_group = nullptr;
         g_status.comm_nccl_id_hash = 0;
-        
     }
+
+    g_status.group_end();
     return ret;
 }

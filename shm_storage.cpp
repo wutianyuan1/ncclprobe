@@ -1,6 +1,8 @@
-#include "shm_storage.hpp"
 #include <iostream>
 #include <cassert>
+#include <boost/log/trivial.hpp>
+#include "shm_storage.hpp"
+#include "utils.hpp"
 using namespace boost::interprocess;
 
 
@@ -17,7 +19,9 @@ RecordBuffer::RecordBuffer(size_t numFields, size_t maxRecords, void* mem_addres
 {
     this->addr = reinterpret_cast<uint64_t*>(mem_address);
     this->buffer = this->addr + METADATA_FIELDS;
-    printf("before INIT rank:%s, num:%lu, head:%lu, tail:%lu\n", getenv("RANK"), addr[2], addr[3], addr[4]);
+    char init_msg[256];
+    sprintf(init_msg, "[Before buffer init] Rank:%d, num:%lu, head:%lu, tail:%lu\n", get_rank(DistEngine::auto_find), addr[2], addr[3], addr[4]);
+    BOOST_LOG_TRIVIAL(info) << init_msg;
     // addr[5] == BUFFER_MAGIC indicates it is initialized
     if (addr[5] != BUFFER_MAGIC)
     {

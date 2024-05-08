@@ -22,6 +22,7 @@ struct Communicator
     uint64_t num_channels;
     uint64_t last_ring_id, last_tree_id;
     uint64_t comm_addr;
+    int num_devices;
     int global_rank;
     int local_rank;
     int group_rank;

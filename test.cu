@@ -9,7 +9,9 @@
 #include <mpi.h>
 
 
-#define N_REPEAT 1
+#define N_REPEAT 3
+#define SNEDPEER 3
+#define RECVPEER 2
 
 #define MPICHECK(cmd) do {                          \
   int e = cmd;                                      \
@@ -77,7 +79,7 @@ __global__ void fillBuffer(float *buf, int value, int size) {
 
 int main(int argc, char* argv[])
 {
-  int size = 16;
+  int size = 128 * 1024 * 1024;
   int myRank, nRanks, localRank = 0;
 
   //initializing MPI
@@ -131,19 +133,43 @@ int main(int argc, char* argv[])
   int threadsPerBlock = 256;
   int blocksPerGrid = (size + threadsPerBlock - 1) / threadsPerBlock;
   fillBuffer<<<blocksPerGrid, threadsPerBlock, 0, s>>>(sendbuff, myRank, size);
+  fillBuffer<<<blocksPerGrid, threadsPerBlock, 0, s>>>(recvbuff, 10086, size);
   CUDACHECK(cudaStreamSynchronize(s));
 
   // Initializing NCCL with sub-communicator
-  NCCLCHECK(ncclGroupStart());
   NCCLCHECK(ncclCommInitRank(&comm, subSize, id, subRank));
-  NCCLCHECK(ncclGroupEnd());
   MPI_Barrier(MPI_COMM_WORLD);
 
   // Communicating using NCCL within sub-communicators
+  // int nn = myRank == 1 ? N_REPEAT : N_REPEAT - 1;
   for (int i = 0; i < N_REPEAT; i++) {
-    NCCLCHECK(ncclGroupStart());
+    // cudaEvent_t start, stop;
+    // float duration;
+    // cudaEventCreate(&start);
+    // cudaEventCreate(&stop);
+    
+    // if (myRank == SNEDPEER) {
+    //   sleep(1);
+    //   cudaEventRecord(start, s);
+    //   NCCLCHECK(ncclSend(sendbuff, size, ncclFloat, RECVPEER, comm, s));
+    //   cudaEventRecord(stop, s);
+      
+    // } else if (myRank == RECVPEER) {
+    //   cudaEventRecord(start, s);
+    //   NCCLCHECK(ncclRecv(recvbuff, size, ncclFloat, SNEDPEER, comm, s));
+    //   cudaEventRecord(stop, s);
+    // } else {
+    //   cudaEventRecord(start, s);
+    //   cudaEventRecord(stop, s);
+    // }
+    // cudaEventSynchronize(stop);
+    // cudaEventElapsedTime(&duration, start, stop);
+    // printf("Rank %d, time: %f\n", myRank, duration);
+
+    // NCCLCHECK(ncclGroupStart());
     NCCLCHECK(ncclAllReduce((const void*)sendbuff, (void*)recvbuff, size, ncclFloat, ncclAvg, comm, s));
-    NCCLCHECK(ncclGroupEnd());    
+    // NCCLCHECK(ncclGroupEnd());
+    printf("Rank %d, allreduce: %d\n", myRank, i);
   }
 
   // Completing NCCL operation by synchronizing on the CUDA stream
@@ -160,6 +186,8 @@ int main(int argc, char* argv[])
 
   // Finalizing NCCL
   ncclCommDestroy(comm);
+
+  while (1) {};
 
   // Finalizing MPI sub-communicator
   MPICHECK(MPI_Comm_free(&subComm));

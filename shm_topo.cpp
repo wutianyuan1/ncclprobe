@@ -1,5 +1,5 @@
 #include "shm_topo.hpp"
-
+#include "utils.hpp"
 using namespace boost::interprocess;
 
 
@@ -25,6 +25,7 @@ Communicator::Communicator(const Communicator& other) {
     last_ring_id = other.last_ring_id;
     last_tree_id = other.last_tree_id;
     comm_addr = other.comm_addr;
+    num_devices = other.num_devices;
     global_rank = other.global_rank;
     local_rank = other.local_rank;
     group_rank = other.group_rank;
@@ -56,6 +57,7 @@ void Communicator::serialize(std::ostream& out) {
     out.write(reinterpret_cast<const char*>(&last_ring_id), sizeof(last_ring_id));
     out.write(reinterpret_cast<const char*>(&last_tree_id), sizeof(last_tree_id));
     out.write(reinterpret_cast<const char*>(&comm_addr), sizeof(comm_addr));
+    out.write(reinterpret_cast<const char*>(&num_devices), sizeof(num_devices));
     out.write(reinterpret_cast<const char*>(&global_rank), sizeof(global_rank));
     out.write(reinterpret_cast<const char*>(&local_rank), sizeof(local_rank));
     out.write(reinterpret_cast<const char*>(&group_rank), sizeof(group_rank));
@@ -70,6 +72,7 @@ void Communicator::from_bytes(std::istream& in) {
     in.read(reinterpret_cast<char*>(&last_ring_id), sizeof(last_ring_id));
     in.read(reinterpret_cast<char*>(&last_tree_id), sizeof(last_tree_id));
     in.read(reinterpret_cast<char*>(&comm_addr), sizeof(comm_addr));
+    in.read(reinterpret_cast<char*>(&num_devices), sizeof(num_devices));
     in.read(reinterpret_cast<char*>(&global_rank), sizeof(global_rank));
     in.read(reinterpret_cast<char*>(&local_rank), sizeof(local_rank));
     in.read(reinterpret_cast<char*>(&group_rank), sizeof(group_rank));
@@ -82,11 +85,13 @@ void Communicator::debug_print()
 {
     std::stringstream ss;
     ss << "<GPU Connection Info>\n"
-        << "  Global Rank:" << global_rank << ", Group Rank: " << group_rank << ", Local Rank: " << local_rank << ", #channels: " << num_channels << "\n";
+        << "  Global Rank:" << global_rank << ", Group Rank: " << group_rank << ", Local Rank: "\
+        << local_rank << ", #devs" << num_devices << ", #channels: " << num_channels << "\n";
     for (int i = 0; i < num_channels; i++)
         ss << "  channel[" << i << "]:\n"
             << "    (Ring id=" << rings[i].index << ", prev=" << rings[i].prev << ", next=" << rings[i].next << ")\n"
-            << "    (Tree depth=" << trees[i].depth << ", up=" << trees[i].up << ", down=(" << trees[i].down[0] << ", " << trees[i].down[1] <<"))\n";
+            << "    (Tree depth=" << trees[i].depth << ", up=" << trees[i].up << ", down=("\
+            << trees[i].down[0] << ", " << trees[i].down[1] <<"))\n";
     BOOST_LOG_TRIVIAL(info) << ss.str();
 }
 
@@ -126,14 +131,14 @@ NcclTopoConnection::find(uint64_t comm_addr)
     client.sync_commit();
     auto reply = reply_future.get();
     if (reply.is_null()) {
-        BOOST_LOG_TRIVIAL(info) << "RANK" << getenv("RANK") << ", Communicator not found";
+        BOOST_LOG_TRIVIAL(info) << "RANK" << get_rank(DistEngine::auto_find) << ", Communicator not found";
         return nullptr;
     }
     std::string binary_data = reply.as_string();
     std::stringstream ss(binary_data);
     std::shared_ptr<Communicator> comm(new Communicator());
     comm->from_bytes(ss);
-    BOOST_LOG_TRIVIAL(info) << "RANK" << getenv("RANK") << ", Communicator found at " << comm_addr;
+    BOOST_LOG_TRIVIAL(info) << "RANK" << get_rank(DistEngine::auto_find) << ", Communicator found at " << comm_addr;
     return comm;
 }
 

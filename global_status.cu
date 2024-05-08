@@ -1,4 +1,5 @@
 #include "global_status.hpp"
+#include "utils.hpp"
 
 #ifndef RECORD_TOO_SMALL
     #define RECORD_TOO_SMALL(count) ((count) < MIN_RECORD_OP_SIZE)
@@ -42,9 +43,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
     this->comm_in_group = nullptr;
     this->local_comms.clear();
 
-    char* rank_str = getenv("RANK"), *mpi_rank_str = getenv("OMPI_COMM_WORLD_RANK");
-    char* real_rank_str = rank_str ? rank_str : mpi_rank_str;
-    if (std::atoi(real_rank_str) == 0)
+    if (get_rank(DistEngine::auto_find) == 0)
         BOOST_LOG_TRIVIAL(info) << "The buffer contains " << Record::numFields() << " fields." << std::endl;
 
     // Third, initialize event timing utils
@@ -53,6 +52,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
     this->curr_stream = nullptr;
     this->event_op = NcclNumber::INVALID;
     this->has_events_in_group = false;
+    this->in_group = false;
     cudaEventCreate(&group_op_start);
     cudaEventCreate(&group_op_stop);
 
@@ -65,7 +65,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
     // Finally, initialize the start running time
     start_time = system_clock::now();
 
-    BOOST_LOG_TRIVIAL(info) << "Rank: " << real_rank_str << ", global Status initialized!!" << std::endl;
+    BOOST_LOG_TRIVIAL(info) << "Rank: " << get_rank(DistEngine::auto_find) << ", global Status initialized!!" << std::endl;
 }
 
 void GlobalStatus::reset_accumulation(NcclNumber last_call_number)
@@ -76,10 +76,11 @@ void GlobalStatus::reset_accumulation(NcclNumber last_call_number)
     last_call_id = last_call_number;
 }
 
-void GlobalStatus::update_accumulation(NcclNumber last_call_number, uint64_t count)
+void GlobalStatus::update_accumulation(NcclNumber last_call_number, uint64_t count, float op_duration)
 {
     repeated_call_num++;
     last_call_id = last_call_number;
+    accumulated_duration += op_duration;
     accumulated_count += count;
 }
 
@@ -94,11 +95,21 @@ double GlobalStatus::time_since_initialize()
 }
 
 
-void GlobalStatus::reset_group_events()
+void GlobalStatus::group_start()
 {
+    in_group = true;
     has_events_in_group = false;
     curr_stream = nullptr;
 }
+
+
+void GlobalStatus::group_end()
+{
+    in_group = false;
+    has_events_in_group = false;
+    curr_stream = nullptr;
+}
+
 
 void GlobalStatus::add_timing_event(NcclNumber op, uint64_t count, cudaStream_t stream)
 {
@@ -107,18 +118,20 @@ void GlobalStatus::add_timing_event(NcclNumber op, uint64_t count, cudaStream_t 
         return;
     // Else, record it
     event_op = op;
-    // avoid repeat recording
-    if (!has_events_in_group) {
+    // The CUDA event will be added if:
+    // (1) We are in a NCCL group but it is the first call; (2) We are not in group
+    if (!has_events_in_group || !in_group) {
+        if (in_group)
+            has_events_in_group = true;
         cudaEventRecord(group_op_start, stream);
-        has_events_in_group = true;
-        curr_stream = stream;  
+        curr_stream = stream;
     }
 }
 
 double GlobalStatus::get_communication_time()
 {
-    // If no operations are recorded, return -1
-    if (!has_events_in_group)
+    // If no operations are recorded (i.e., we are in a group but no calls within it), return -1
+    if (in_group && !has_events_in_group)
         return -1.0;
     // Else report the event time
     float duration = 0;

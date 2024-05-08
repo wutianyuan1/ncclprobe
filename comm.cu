@@ -1,4 +1,5 @@
 #include "comm.hpp"
+#include "utils.hpp"
 
 
 struct HackedComm {
@@ -183,15 +184,14 @@ void parse_communicator(ncclComm_t hidden_comm, Communicator* parsed_comm)
     // pure reverse engineering, I'm sb
     HackedComm* hcomm = reinterpret_cast<HackedComm*>(hidden_comm);
     parsed_comm->comm_addr = reinterpret_cast<uint64_t>(hcomm);
+    parsed_comm->num_devices = hcomm->nRanks;
 
     // Note: the `rank` of a communicator is the rank in its communication group
     parsed_comm->group_rank = hcomm->rank;
 
-    // For torchrun, RANK and LOCAL_RANK are properly set in environment variables
-    const char* local_rank_str = getenv("LOCAL_RANK");
-    parsed_comm->local_rank = local_rank_str ? std::atoi(local_rank_str) : COMM_RANK_UNDEFINED;
-    const char* global_rank_str = getenv("RANK");
-    parsed_comm->global_rank = global_rank_str ? std::atoi(global_rank_str) : COMM_RANK_UNDEFINED;
+    // For torchrun/ompi, RANK and LOCAL_RANK are properly set in environment variables
+    parsed_comm->local_rank = get_local_rank(DistEngine::auto_find);
+    parsed_comm->global_rank = get_rank(DistEngine::auto_find);
 
     parsed_comm->num_channels = hcomm->nChannels;
 

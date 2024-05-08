@@ -37,6 +37,7 @@ struct GlobalStatus {
     cudaStream_t curr_stream;
     NcclNumber event_op;
     bool has_events_in_group;
+    bool in_group;
 
     // TP related compression operations
     NcclNumber last_call_id;
@@ -63,11 +64,12 @@ public:
     // Returns the time since probe initialization in microseconds (us)
     double time_since_initialize();
 
-    // Resets the `has_events_in_group` to false
-    void reset_group_events();
+    // Entry & Exit of NCCL groups
+    void group_start();
+    void group_end();
 
     // Updates the TP accumulated calls (AllGather, ReduceScatter)
-    void update_accumulation(NcclNumber last_call_number, uint64_t count);
+    void update_accumulation(NcclNumber last_call_number, uint64_t count, float op_duration);
 
     // Resets the TP accumulated calls (AllGather, ReduceScatter)
     void reset_accumulation(NcclNumber last_call_number);
