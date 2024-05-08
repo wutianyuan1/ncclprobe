@@ -8,6 +8,7 @@
 #include <nccl.h>
 #include <cuda_runtime.h>
 #include <dlfcn.h>
+#include <cpp_redis/cpp_redis>
 #include <boost/log/trivial.hpp>
 #include <boost/log/core.hpp>
 #include <boost/log/expressions.hpp>
@@ -53,6 +54,9 @@ struct GlobalStatus {
 
     // To implement pause and resume function
     ncclComm_t world_comm;
+    std::shared_ptr<cpp_redis::client> client;
+    bool should_check;
+    int* pause;
 public:
     GlobalStatus() = default;
     GlobalStatus(const char* nccl_path_);

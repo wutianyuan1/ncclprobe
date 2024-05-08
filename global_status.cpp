@@ -9,7 +9,9 @@
 GlobalStatus::GlobalStatus(const char* nccl_path_)
     : nccl_lib_handle(nullptr), storage_buffer(nullptr)
 {
+    printf("!!! init!!\n");
     initialize(nccl_path_);
+    printf("!!! init done!!\n");
 }
 
 void GlobalStatus::initialize(const char* nccl_path_)
@@ -64,6 +66,10 @@ void GlobalStatus::initialize(const char* nccl_path_)
 
     // Initialize pause communicator
     this->world_comm = nullptr;
+    this->should_check = false;
+    this->client = std::shared_ptr<cpp_redis::client>(new cpp_redis::client);
+    this->client->connect("127.0.0.1", 6379);
+    cudaMalloc(&this->pause, sizeof(int) * 4);
 
     // Finally, initialize the start running time
     start_time = system_clock::now();

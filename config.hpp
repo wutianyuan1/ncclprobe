@@ -49,3 +49,5 @@ DEFINE_ENUM_WITH_STRING_CONVERSIONS(
 #define MIN_RECORD_OP_SIZE 1024
 // max number of communicators in a single rank
 #define MAX_COMMS_PER_RANK 128
+// the interval to check whether to pause
+#define PAUSE_CHECK_INTERVAL 1000

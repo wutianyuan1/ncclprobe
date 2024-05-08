@@ -9,7 +9,7 @@
 #include <mpi.h>
 
 
-#define N_REPEAT 3
+#define N_REPEAT 3000000
 #define SNEDPEER 3
 #define RECVPEER 2
 
@@ -166,9 +166,9 @@ int main(int argc, char* argv[])
     // cudaEventElapsedTime(&duration, start, stop);
     // printf("Rank %d, time: %f\n", myRank, duration);
 
-    // NCCLCHECK(ncclGroupStart());
+    NCCLCHECK(ncclGroupStart());
     NCCLCHECK(ncclAllReduce((const void*)sendbuff, (void*)recvbuff, size, ncclFloat, ncclAvg, comm, s));
-    // NCCLCHECK(ncclGroupEnd());
+    NCCLCHECK(ncclGroupEnd());
     printf("Rank %d, allreduce: %d\n", myRank, i);
   }
 
@@ -186,8 +186,6 @@ int main(int argc, char* argv[])
 
   // Finalizing NCCL
   ncclCommDestroy(comm);
-
-  while (1) {};
 
   // Finalizing MPI sub-communicator
   MPICHECK(MPI_Comm_free(&subComm));
