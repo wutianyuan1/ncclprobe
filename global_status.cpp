@@ -62,6 +62,9 @@ void GlobalStatus::initialize(const char* nccl_path_)
     this->accumulated_count = 0;
     this->accumulated_duration = 0.0;
 
+    // Initialize pause communicator
+    this->world_comm = nullptr;
+
     // Finally, initialize the start running time
     start_time = system_clock::now();
 

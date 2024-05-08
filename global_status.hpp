@@ -51,6 +51,8 @@ struct GlobalStatus {
     // Temporary record buffer
     std::vector<Record> tmp_record_buffer;
 
+    // To implement pause and resume function
+    ncclComm_t world_comm;
 public:
     GlobalStatus() = default;
     GlobalStatus(const char* nccl_path_);

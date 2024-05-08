@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <cmath>
 
 // floating point comparison
 #define FLOAT_EQ(a, b) (fabs((a) - (b)) < 1e-4)
