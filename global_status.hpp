@@ -12,6 +12,7 @@
 #include <boost/log/trivial.hpp>
 #include <boost/log/core.hpp>
 #include <boost/log/expressions.hpp>
+#include <boost/process.hpp>
 #include "config.hpp"
 #include "shm_storage.hpp"
 #include "shm_topo.hpp"
@@ -57,6 +58,12 @@ struct GlobalStatus {
     std::shared_ptr<cpp_redis::client> client;
     bool should_check;
     int* pause;
+
+    // global controller & local controllers
+    std::shared_ptr<boost::process::child> global_controller_proc;
+    std::shared_ptr<boost::process::child> local_controller_proc;
+private:
+    int start_global_controller();
 public:
     GlobalStatus() = default;
     GlobalStatus(const char* nccl_path_);

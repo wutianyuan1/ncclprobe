@@ -119,7 +119,7 @@ NcclTopoConnection::add_comm(Communicator& comm)
     std::stringstream ss;
     comm.serialize(ss);
     std::string data = ss.str();
-    client.set(std::to_string(comm.comm_addr), data);
+    client.set(std::string("Communicator_") + std::to_string(comm.comm_addr), data);
     client.sync_commit();
     return nullptr;
 }

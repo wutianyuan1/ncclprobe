@@ -293,12 +293,13 @@ static void handle_process_pause(ncclComm_t world_comm, std::shared_ptr<cpp_redi
 {
     Communicator parsed_comm;
     parse_communicator(world_comm, &parsed_comm);
+
     if (parsed_comm.group_rank == 0)
     {
         int my_pause = 0;
-        client->get("pause",
+        client->get("control_state",
             [&](const cpp_redis::reply& reply) {
-                if (reply.is_string() && reply.as_string()[0] == '1') my_pause = 1;
+                if (reply.is_string() && reply.as_string()[0] == '2') my_pause = 1;
             }
         );
         client->sync_commit();
@@ -318,12 +319,22 @@ static void handle_process_pause(ncclComm_t world_comm, std::shared_ptr<cpp_redi
     {
         while (true)
         {
+            // check my task to do in this term.
+            client->get(std::string("validtask_rank_") + std::to_string(get_rank(DistEngine::auto_find)),
+                [&](const cpp_redis::reply& reply) {
+                    if (reply.is_string() && reply.as_string()[0] != '2') {
+                        printf("I am rank %d, my task is %s\n", get_rank(DistEngine::auto_find), reply.as_string().c_str());
+                    }
+                }
+            );
+
+
             if (parsed_comm.group_rank == 0)
             {
                 int my_pause = 1;
-                client->get("pause",
+                client->get("control_state",
                     [&](const cpp_redis::reply& reply) {
-                        if (reply.is_string() && reply.as_string()[0] == '0') my_pause = 0;
+                        if (reply.is_string() && reply.as_string()[0] != '2') my_pause = 0;
                     }
                 );
                 client->sync_commit();

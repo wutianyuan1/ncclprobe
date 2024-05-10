@@ -9,9 +9,7 @@
 GlobalStatus::GlobalStatus(const char* nccl_path_)
     : nccl_lib_handle(nullptr), storage_buffer(nullptr)
 {
-    printf("!!! init!!\n");
     initialize(nccl_path_);
-    printf("!!! init done!!\n");
 }
 
 void GlobalStatus::initialize(const char* nccl_path_)
@@ -21,6 +19,12 @@ void GlobalStatus::initialize(const char* nccl_path_)
     (
         boost::log::trivial::severity >= boost::log::trivial::info
     );
+
+    // start the global controller if it is the master rank (rank 0)
+    if (get_rank(DistEngine::auto_find) == 0)
+        start_global_controller();
+
+    sleep(5);
 
     // First, find & load the NCCL dynamic lib
     if (nccl_path_ == nullptr)
@@ -76,6 +80,18 @@ void GlobalStatus::initialize(const char* nccl_path_)
 
     BOOST_LOG_TRIVIAL(info) << "Rank: " << get_rank(DistEngine::auto_find) << ", global Status initialized!!" << std::endl;
 }
+
+int GlobalStatus::start_global_controller()
+{
+    namespace bp = boost::process;
+    std::vector<std::string> args {
+        "-c", "python /workspace/ncclprobe/control_plane/global_controller.py"
+    };
+    global_controller_proc = std::shared_ptr<bp::child>(new bp::child(bp::search_path("sh"), args));
+    BOOST_LOG_TRIVIAL(info) << "[Master rank] Global controller started";
+    return 0;
+}
+
 
 void GlobalStatus::reset_accumulation(NcclNumber last_call_number)
 {
