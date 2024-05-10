@@ -68,12 +68,11 @@ void GlobalStatus::initialize(const char* nccl_path_)
     this->accumulated_count = 0;
     this->accumulated_duration = 0.0;
 
-    // Initialize pause communicator
-    this->world_comm = nullptr;
+    // Initialize interaction compoent
     this->should_check = false;
-    this->client = std::shared_ptr<cpp_redis::client>(new cpp_redis::client);
-    this->client->connect("127.0.0.1", 6379);
-    cudaMalloc(&this->pause, sizeof(int) * 4);
+    this->event_handler = std::shared_ptr<EventHandler>(
+        new EventHandler("127.0.0.1", 6379)
+    );
 
     // Finally, initialize the start running time
     start_time = system_clock::now();

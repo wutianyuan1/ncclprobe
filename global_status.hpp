@@ -16,6 +16,7 @@
 #include "config.hpp"
 #include "shm_storage.hpp"
 #include "shm_topo.hpp"
+#include "event_handler.hpp"
 
 using namespace std::chrono;
 
@@ -53,11 +54,9 @@ struct GlobalStatus {
     // Temporary record buffer
     std::vector<Record> tmp_record_buffer;
 
-    // To implement pause and resume function
-    ncclComm_t world_comm;
-    std::shared_ptr<cpp_redis::client> client;
+    // To implement worker-side response to controllers
+    std::shared_ptr<EventHandler> event_handler;
     bool should_check;
-    int* pause;
 
     // global controller & local controllers
     std::shared_ptr<boost::process::child> global_controller_proc;

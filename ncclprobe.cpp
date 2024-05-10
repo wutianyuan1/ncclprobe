@@ -58,9 +58,9 @@ static ncclResult_t log_communicator(std::shared_ptr<NcclTopoConnection> comm_ca
     comm_cache->add_comm(parsed_comm);
     g_status.local_comms.push_back(parsed_comm);
     // For the first time we create a communicator with WORLD_SIZE, we save it for pausing.
-    if (g_status.world_comm == nullptr && parsed_comm.num_devices == get_world_size(DistEngine::auto_find))
-        g_status.world_comm = hidden_comm;
-        
+    if (!(g_status.event_handler->has_world_comm())
+        && (parsed_comm.num_devices == get_world_size(DistEngine::auto_find)) )
+        g_status.event_handler->set_world_comm(hidden_comm);
     return ncclSuccess;
 }
 
@@ -73,7 +73,8 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
     char pcistr[PCI_STR_LEN] = {0};
     auto call_time = 0.0, call_duration = 0.0;
 
-    if (datatype == ncclInt8 && count == CHECK_PAUSE_MAGIC)
+    // if (datatype == ncclInt8 && count == CHECK_PAUSE_MAGIC)
+    if (1)
         g_status.should_check = true;
 
     // skip operations with very small size (<1K)
@@ -289,74 +290,6 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
 }
 
 
-static void handle_process_pause(ncclComm_t world_comm, std::shared_ptr<cpp_redis::client> client)
-{
-    Communicator parsed_comm;
-    parse_communicator(world_comm, &parsed_comm);
-
-    if (parsed_comm.group_rank == 0)
-    {
-        int my_pause = 0;
-        client->get("control_state",
-            [&](const cpp_redis::reply& reply) {
-                if (reply.is_string() && reply.as_string()[0] == '2') my_pause = 1;
-            }
-        );
-        client->sync_commit();
-        if (my_pause)
-            cudaMemcpy(g_status.pause, &my_pause, sizeof(int), cudaMemcpyHostToDevice);
-        ncclBroadcast(g_status.pause, g_status.pause, 1, ncclInt, 0, world_comm, g_status.curr_stream);
-    } else {
-        ncclBroadcast(nullptr, g_status.pause, 1, ncclInt, 0, world_comm, g_status.curr_stream);
-    }
-    int sync_pause = 0;
-    cudaMemcpy(&sync_pause, g_status.pause, sizeof(int), cudaMemcpyDeviceToHost);
-    if (sync_pause)
-        BOOST_LOG_TRIVIAL(info) << "Rank " << get_rank(DistEngine::auto_find) << " receives pause signal, paused!";
-
-    // If we should pause, then loop to wait the "continue" (pause=0) signal 
-    if (sync_pause == 1)
-    {
-        while (true)
-        {
-            // check my task to do in this term.
-            client->get(std::string("validtask_rank_") + std::to_string(get_rank(DistEngine::auto_find)),
-                [&](const cpp_redis::reply& reply) {
-                    if (reply.is_string() && reply.as_string()[0] != '2') {
-                        printf("I am rank %d, my task is %s\n", get_rank(DistEngine::auto_find), reply.as_string().c_str());
-                    }
-                }
-            );
-
-
-            if (parsed_comm.group_rank == 0)
-            {
-                int my_pause = 1;
-                client->get("control_state",
-                    [&](const cpp_redis::reply& reply) {
-                        if (reply.is_string() && reply.as_string()[0] != '2') my_pause = 0;
-                    }
-                );
-                client->sync_commit();
-                if (my_pause == 0)
-                    cudaMemcpy(g_status.pause, &my_pause, sizeof(int), cudaMemcpyHostToDevice);
-                ncclBroadcast(g_status.pause, g_status.pause, 1, ncclInt, 0, world_comm, g_status.curr_stream);
-            } else {
-                ncclBroadcast(nullptr, g_status.pause, 1, ncclInt, 0, world_comm, g_status.curr_stream);
-            }
-            int should_block = 0;
-            cudaMemcpy(&should_block, g_status.pause, sizeof(int), cudaMemcpyDeviceToHost);
-            if (!should_block)
-            {
-                BOOST_LOG_TRIVIAL(info) << "Rank " << get_rank(DistEngine::auto_find) << " receives continue signal, will continue!";
-                break;   
-            }
-            usleep(500 * 1000);  // wait for 0.5 seconds
-        }
-    }
-}
-
-
 ncclResult_t ncclGroupStart()
 {
     detect_sys_init();
@@ -398,7 +331,7 @@ ncclResult_t ncclGroupEnd()
 
     // check whether to pause every PAUSE_CHECK_INTERVAL function calls
     if (g_status.should_check) {
-        handle_process_pause(g_status.world_comm, g_status.client);
+        g_status.event_handler->handle_control_signal(g_status.curr_stream);
         g_status.should_check = false;
     }
     

@@ -2,6 +2,7 @@ import time
 import argparse
 import subprocess
 import redis
+import struct
 from typing import List
 from global_topo import GlobalTopo
 from task_split import split_ring
@@ -17,6 +18,25 @@ class ControlState:
 class ProcessRole:
     ROLE_SENDER = 0
     ROLE_RECVER = 1
+    ROLE_ACKED  = 10086
+
+
+class PerformanceMetric(object):
+    def __init__(self, min_lat, max_lat, avg_lat) -> None:
+        self.min_lat = min_lat
+        self.max_lat = max_lat
+        self.avg_lat = avg_lat
+
+    @classmethod
+    def from_bytes(cls, redis_data):
+        data = struct.unpack('ddd', redis_data[:24])
+        return PerformanceMetric(*data)
+    
+    def __repr__(self):
+        return str(self)
+
+    def __str__(self):
+        return f"(Perf: min={self.min_lat}, max={self.max_lat}, avg={self.avg_lat})"
 
 
 class GlobalServer(object):
@@ -62,7 +82,19 @@ class GlobalServer(object):
                 f"validtask_rank_{r}", f"{ProcessRole.ROLE_RECVER}_{s}"
             )
         print(f"task {task} dispatched!")
-        time.sleep(5)
+
+    def get_task_result(self, task):
+        senders, recvers = task
+        all_ranks = set(senders + recvers)
+        results = {}
+        while len(results) != len(all_ranks):
+            for r in all_ranks:
+                res = self.storage.get(f"validtask_rank_{r}_result")
+                if res is not None:
+                    results[r] = PerformanceMetric.from_bytes(res)
+                    print(f"rank {r} collected = {results[r]}!!")
+            time.sleep(0.5)
+        return results
 
     def start_redis_server(self):
         try:
@@ -79,6 +111,8 @@ class GlobalServer(object):
         print(ring, tasks)
         for task in tasks:
             self.dispatch_task(task)
+            self.get_task_result(task)
+            print("*" * 20 + "task completed!" + "*" * 20)
 
     def run(self):
         try:
