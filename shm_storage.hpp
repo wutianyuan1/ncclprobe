@@ -10,15 +10,15 @@
 
 struct Record
 {
-    uint64_t callNumber, count, buff1Addr, buff2Addr, datatype, pid,
+    uint64_t commAddr, callNumber, count, buff1Addr, buff2Addr, datatype, pid,
         callTime, deviceId, caller, aux, duration, numDevices, event_id;
 
-    Record(uint64_t callNumber_, uint64_t count_,
+    Record(uint64_t commAddr_, uint64_t callNumber_, uint64_t count_,
            uint64_t buff1Addr_, uint64_t buff2Addr_,
            uint64_t datatype_, uint64_t pid_, uint64_t callTime_,
            uint64_t deviceId_, uint64_t caller_, uint64_t aux_,
            uint64_t duration_, uint64_t numdevs)
-      : callNumber(callNumber_), count(count_), buff1Addr(buff1Addr_),
+      : commAddr(commAddr_), callNumber(callNumber_), count(count_), buff1Addr(buff1Addr_),
         buff2Addr(buff2Addr_), datatype(datatype_), pid(pid_), callTime(callTime_),
         deviceId(deviceId_), caller(caller_), aux(aux_),
         duration(duration_), numDevices(numdevs), event_id(0)
@@ -26,7 +26,7 @@ struct Record
 
     std::vector<uint64_t> toVector()
     {
-        std::vector<uint64_t> res({callNumber, count, buff1Addr, buff2Addr, datatype,
+        std::vector<uint64_t> res({commAddr, callNumber, count, buff1Addr, buff2Addr, datatype,
             pid, callTime, deviceId, caller, aux, duration, numDevices, event_id});
         return res;
     }

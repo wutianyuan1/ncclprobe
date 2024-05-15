@@ -64,6 +64,7 @@ bool EventHandler::has_world_comm() const
 void EventHandler::set_world_comm(ncclComm_t comm)
 {
     this->world_comm = comm;
+    parse_communicator(world_comm, &(this->parsed_comm));
 }
 
 void EventHandler::fetech_and_exec_task()
@@ -96,34 +97,38 @@ void EventHandler::fetech_and_exec_task()
     client->sync_commit();
 }
 
-void EventHandler::handle_control_signal(cudaStream_t curr_stream)
+void EventHandler::handle_control_signal(cudaStream_t curr_stream, ControlState* state)
 {
-    Communicator parsed_comm;
-    parse_communicator(world_comm, &parsed_comm);
-
     if (parsed_comm.group_rank == 0)
     {
-        int my_pause = 0;
+        ControlState master_state = ControlState::STATE_MONITOR;
         client->get("control_state",
             [&](const cpp_redis::reply& reply) {
-                if (reply.is_string() && reply.as_string()[0] == '2') my_pause = 1;
+                if (!reply.is_string()) {
+                    BOOST_LOG_TRIVIAL(error) << "Reply is not a string!";
+                    return;
+                }
+                auto reply_str = reply.as_string();
+                if (reply_str[0] != 0)
+                    master_state = ControlState(reply_str[0] - '0');
             }
         );
         client->sync_commit();
-        if (my_pause)
-            cudaMemcpy(control_state, &my_pause, sizeof(int), cudaMemcpyHostToDevice);
+        if (master_state != *state)  // broadcast if state changes
+            cudaMemcpy(control_state, &master_state, sizeof(int), cudaMemcpyHostToDevice);
         ncclBroadcast(control_state, control_state, 1, ncclInt, 0, world_comm, curr_stream);
-    } else {
+    } 
+    else
         ncclBroadcast(nullptr, control_state, 1, ncclInt, 0, world_comm, curr_stream);
-    }
-    int sync_pause = 0;
-    cudaMemcpy(&sync_pause, control_state, sizeof(int), cudaMemcpyDeviceToHost);
-    if (sync_pause)
-        BOOST_LOG_TRIVIAL(info) << "Rank " << get_rank(DistEngine::auto_find) << " receives pause signal, paused!";
+
+    ControlState sync_state = ControlState::STATE_MONITOR;
+    cudaMemcpy(&sync_state, control_state, sizeof(int), cudaMemcpyDeviceToHost);
+    *state = sync_state;
 
     // If we should pause, then loop to wait the "continue" (pause=0) signal 
-    if (sync_pause == 1)
+    if (sync_state == ControlState::STATE_VALIDATE)
     {
+        BOOST_LOG_TRIVIAL(info) << "Rank " << get_rank(DistEngine::auto_find) << " receives pause signal, paused!";
         while (true)
         {
             // fetch a task from redis and execute it
@@ -142,12 +147,13 @@ void EventHandler::handle_control_signal(cudaStream_t curr_stream)
                 if (my_pause == 0)
                     cudaMemcpy(control_state, &my_pause, sizeof(int), cudaMemcpyHostToDevice);
                 ncclBroadcast(control_state, control_state, 1, ncclInt, 0, world_comm, curr_stream);
-            } else {
-                ncclBroadcast(nullptr, control_state, 1, ncclInt, 0, world_comm, curr_stream);
             }
-            int should_block = 0;
-            cudaMemcpy(&should_block, control_state, sizeof(int), cudaMemcpyDeviceToHost);
-            if (!should_block)
+            else
+                ncclBroadcast(nullptr, control_state, 1, ncclInt, 0, world_comm, curr_stream);
+
+            int do_validation = 0;
+            cudaMemcpy(&do_validation, control_state, sizeof(int), cudaMemcpyDeviceToHost);
+            if (!do_validation)
             {
                 BOOST_LOG_TRIVIAL(info) << "Rank " << get_rank(DistEngine::auto_find) << " receives continue signal, will continue!";
                 break;   

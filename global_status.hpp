@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <exception>
+#include <system_error>
 #include <cuda.h>
 #include <nccl.h>
 #include <cuda_runtime.h>
@@ -36,6 +37,7 @@ struct GlobalStatus {
     uint64_t comm_nccl_id_hash;
 
     // timing utils
+    ControlState state;
     cudaEvent_t group_op_start, group_op_stop;
     cudaStream_t curr_stream;
     NcclNumber event_op;
@@ -44,6 +46,7 @@ struct GlobalStatus {
 
     // TP related compression operations
     NcclNumber last_call_id;
+    ncclComm_t last_comm;
     uint64_t repeated_call_num;
     uint64_t accumulated_count;
     float accumulated_duration;
@@ -63,9 +66,11 @@ struct GlobalStatus {
     std::shared_ptr<boost::process::child> local_controller_proc;
 private:
     int start_global_controller();
+    int start_local_controller();
 public:
     GlobalStatus() = default;
     GlobalStatus(const char* nccl_path_);
+    ~GlobalStatus();
 
     // Initializes all status
     void initialize(const char* nccl_path_);
@@ -81,7 +86,7 @@ public:
     void group_end();
 
     // Updates the TP accumulated calls (AllGather, ReduceScatter)
-    void update_accumulation(NcclNumber last_call_number, uint64_t count, float op_duration);
+    void update_accumulation(NcclNumber last_call_number, uint64_t count, ncclComm_t tp_comm);
 
     // Resets the TP accumulated calls (AllGather, ReduceScatter)
     void reset_accumulation(NcclNumber last_call_number);

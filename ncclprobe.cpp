@@ -73,8 +73,7 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
     char pcistr[PCI_STR_LEN] = {0};
     auto call_time = 0.0, call_duration = 0.0;
 
-    // if (datatype == ncclInt8 && count == CHECK_PAUSE_MAGIC)
-    if (1)
+    if (datatype == ncclInt8 && count == CHECK_PAUSE_MAGIC)
         g_status.should_check = true;
 
     // skip operations with very small size (<1K)
@@ -94,7 +93,7 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
     if (can_compress(number))
     {
         // If this call is AllGather or ReduceScatter (special operators in TP)
-        g_status.update_accumulation(number, count, 0.0f);
+        g_status.update_accumulation(number, count, comm);
         return ncclSuccess;
     }
 
@@ -107,7 +106,7 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
         // the previous call is, but the current is not
         // we should first add this compressed record to the buffer
         Record compressed_record(
-            g_status.repeated_call_num, g_status.accumulated_count, 
+            (uint64_t)g_status.last_comm, g_status.repeated_call_num, g_status.accumulated_count, 
             reinterpret_cast<uint64_t>(buff1), reinterpret_cast<uint64_t>(buff2),
             (uint64_t)(datatype), (uint64_t)(getpid()), (uint64_t)(call_time),
             (uint64_t)(dev_id), (uint64_t)(get_rank(DistEngine::auto_find)), aux, 
@@ -126,7 +125,7 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
         call_duration = g_status.get_communication_time();
 
     Record record(
-        (uint64_t)number, count, reinterpret_cast<uint64_t>(buff1),
+        (uint64_t)comm, (uint64_t)number, count, reinterpret_cast<uint64_t>(buff1),
         reinterpret_cast<uint64_t>(buff2), (uint64_t)(datatype),
         (uint64_t)(getpid()), (uint64_t)(call_time), (uint64_t)(dev_id),
         (uint64_t)(get_rank(DistEngine::auto_find)), aux, (uint64_t)(call_duration),
@@ -308,7 +307,12 @@ ncclResult_t ncclGroupEnd()
     auto ret = (*real_func)();
     double t = g_status.get_communication_time();
 
-    if (!FLOAT_EQ(t, -1.0))
+    if (g_status.state == ControlState::STATE_MONITOR)
+    {
+        for (auto& rec: g_status.tmp_record_buffer)
+            g_status.storage_buffer->addRecord(rec.toVector());
+    }
+    else if (!FLOAT_EQ(t, 0.0))
     {
         // If this Op can be compressed, just do add it to accumulation
         if (g_status.event_op == NcclNumber::ALL_GATHER || g_status.event_op == NcclNumber::REDUCE_SCATTER)
@@ -329,9 +333,9 @@ ncclResult_t ncclGroupEnd()
     g_status.tmp_record_buffer.clear();
 
 
-    // check whether to pause every PAUSE_CHECK_INTERVAL function calls
+    // Check whether to change state / do validation
     if (g_status.should_check) {
-        g_status.event_handler->handle_control_signal(g_status.curr_stream);
+        g_status.event_handler->handle_control_signal(g_status.curr_stream, &g_status.state);
         g_status.should_check = false;
     }
     

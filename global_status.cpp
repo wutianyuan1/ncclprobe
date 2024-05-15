@@ -12,6 +12,14 @@ GlobalStatus::GlobalStatus(const char* nccl_path_)
     initialize(nccl_path_);
 }
 
+GlobalStatus::~GlobalStatus()
+{
+    if (global_controller_proc != nullptr)
+        global_controller_proc->terminate();
+    if (local_controller_proc != nullptr)
+        local_controller_proc->terminate();
+}
+
 void GlobalStatus::initialize(const char* nccl_path_)
 {
     // Initialize logging system
@@ -23,8 +31,10 @@ void GlobalStatus::initialize(const char* nccl_path_)
     // start the global controller if it is the master rank (rank 0)
     if (get_rank(DistEngine::auto_find) == 0)
         start_global_controller();
-
-    sleep(5);
+    // start the local controller if it is the local master rank (local rank 0)
+    if (get_local_rank(DistEngine::auto_find) == 0)
+        start_local_controller();
+    sleep(3);
 
     // First, find & load the NCCL dynamic lib
     if (nccl_path_ == nullptr)
@@ -50,7 +60,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
     this->local_comms.clear();
 
     if (get_rank(DistEngine::auto_find) == 0)
-        BOOST_LOG_TRIVIAL(info) << "The buffer contains " << Record::numFields() << " fields." << std::endl;
+        BOOST_LOG_TRIVIAL(debug) << "The buffer contains " << Record::numFields() << " fields." << std::endl;
 
     // Third, initialize event timing utils
     this->group_op_start = nullptr;
@@ -64,6 +74,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
 
     // Then, initialize the TP related variables
     this->last_call_id = NcclNumber::INVALID;
+    this->last_comm = nullptr;
     this->repeated_call_num = 0;
     this->accumulated_count = 0;
     this->accumulated_duration = 0.0;
@@ -73,6 +84,9 @@ void GlobalStatus::initialize(const char* nccl_path_)
     this->event_handler = std::shared_ptr<EventHandler>(
         new EventHandler("127.0.0.1", 6379)
     );
+
+    // Set the running state to "MONITOR"
+    this->state = ControlState::STATE_MONITOR;
 
     // Finally, initialize the start running time
     start_time = system_clock::now();
@@ -91,20 +105,31 @@ int GlobalStatus::start_global_controller()
     return 0;
 }
 
+int GlobalStatus::start_local_controller()
+{
+    namespace bp = boost::process;
+    std::vector<std::string> args {
+        "-c", "python /workspace/ncclprobe/control_plane/local_controller.py"
+    };
+    local_controller_proc = std::shared_ptr<bp::child>(new bp::child(bp::search_path("sh"), args));
+    BOOST_LOG_TRIVIAL(info) << "[Local Master rank] Local controller started";
+    return 0;
+}
 
 void GlobalStatus::reset_accumulation(NcclNumber last_call_number)
 {
     repeated_call_num = 0;
     accumulated_count = 0;
     accumulated_duration = 0.0;
+    last_comm = nullptr;
     last_call_id = last_call_number;
 }
 
-void GlobalStatus::update_accumulation(NcclNumber last_call_number, uint64_t count, float op_duration)
+void GlobalStatus::update_accumulation(NcclNumber last_call_number, uint64_t count, ncclComm_t tp_comm)
 {
     repeated_call_num++;
     last_call_id = last_call_number;
-    accumulated_duration += op_duration;
+    last_comm = tp_comm;
     accumulated_count += count;
 }
 
@@ -137,6 +162,9 @@ void GlobalStatus::group_end()
 
 void GlobalStatus::add_timing_event(NcclNumber op, uint64_t count, cudaStream_t stream)
 {
+    // Do nothing if we are in the monitoring state
+    if (state == ControlState::STATE_MONITOR)
+        return;
     // If the operation size<1K, skip it
     if (RECORD_TOO_SMALL(count))
         return;
@@ -154,9 +182,12 @@ void GlobalStatus::add_timing_event(NcclNumber op, uint64_t count, cudaStream_t 
 
 double GlobalStatus::get_communication_time()
 {
-    // If no operations are recorded (i.e., we are in a group but no calls within it), return -1
+    // skip if we are in the monitoring state
+    if (state == ControlState::STATE_MONITOR)
+        return 0.0;
+    // If no operations are recorded (i.e., we are in a group but no calls within it), return 0.0
     if (in_group && !has_events_in_group)
-        return -1.0;
+        return 0.0;
     // Else report the event time
     float duration = 0;
     cudaEventRecord(group_op_stop, curr_stream);

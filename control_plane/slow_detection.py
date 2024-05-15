@@ -95,10 +95,10 @@ def find_performance_drop(call_id, call_time, period, start, thresh_prob=0.8, pl
         ts.append(call_time[i + period] - call_time[i])
         iter_start.append(call_time[i])
     ts, iter_start = remove_outliers(ts, iter_start)
-    result = rb.beast(ts, season='none')
-    rb.print(result)
+    result = rb.beast(ts, season='none', print_options=False, print_progress=False, quiet=True)
+    # rb.print(result)
     num_change_points = int(result.trend.ncp_mode[0])
-    change_point_pos = np.array(result.trend.cp, dtype=np.int32)
+    change_point_pos = np.array(result.trend.cp[:num_change_points], dtype=np.int32)
     change_point_prob = list(result.trend.cpPr)
     ymax = max(ts)
     real_change_points = []
@@ -128,6 +128,7 @@ def find_performance_drop(call_id, call_time, period, start, thresh_prob=0.8, pl
         ax.set_ylabel(plot_args.get('ylabel', 'Y'))
         for cpt in real_change_point_df['values']:
             ax.plot([cpt, cpt], [0, ymax], c='red', label='Validated Change Point')
+    real_change_point_df.reset_index(drop=True, inplace=True)
     return real_change_point_df
 
 
@@ -152,4 +153,4 @@ def find_period(seq, nlags=50, significance_level=0.7):
         return i, estimated_period
     else:
         warnings.warn("No peaks found in ACF, no patterns are found in NCCL logs")
-        return None
+        return -1, None 

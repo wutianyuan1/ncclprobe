@@ -1,12 +1,12 @@
-import re
+import json
 import logging
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from slow_detection import find_period, find_performance_drop
 from multiprocessing import shared_memory, resource_tracker
 
-CONFIG = {}
 OPS = ['Send', 'Recv', 'Bcast', 'Broadcast', 'AllGather', 'ReduceScatter', 'AllReduce']
 SIZEOF_INT64 = 8
 
@@ -22,23 +22,9 @@ def sizestr(size):
         return str(size // (1024**3)) + "GB"
 
 
-def load_config():
-    global CONFIG
-    with open("config.hpp") as header_file:
-        for line in header_file.readlines():
-            if line.startswith("#define"):
-                line.rstrip()
-                m = re.search(r'#define\s+([A-Za-z]\w+)\s+(.*)', line)
-                if m:
-                    content = m.group(2)
-                    CONFIG[m.group(1)] = int(content, base=16 if '0x' in content else 10)
-    with open("shm_storage.hpp") as storage_file:
-        all_lines = storage_file.read().replace("\n", "")
-        all_lines = re.sub(r" +", r" ", all_lines)
-        m = re.search(r'struct Record\{\s*uint64\_t\s([A-Za-z0-9_]+,\s*)*', all_lines)
-        numfields = m.group(0).count(',') + 1
-        CONFIG['NUM_FIELDS'] = numfields
-    print(CONFIG)
+def load_config(config_path: str):
+    with open(config_path, 'r') as f:
+        return json.load(f)
 
 
 def remove_shm_from_resource_tracker():
@@ -49,13 +35,13 @@ def remove_shm_from_resource_tracker():
     def fix_register(name, rtype):
         if rtype == "shared_memory":
             return
-        return resource_tracker._resource_tracker.register(self, name, rtype)
+        return resource_tracker._resource_tracker.register(name, rtype)
     resource_tracker.register = fix_register
 
     def fix_unregister(name, rtype):
         if rtype == "shared_memory":
             return
-        return resource_tracker._resource_tracker.unregister(self, name, rtype)
+        return resource_tracker._resource_tracker.unregister(name, rtype)
     resource_tracker.unregister = fix_unregister
 
     if "shared_memory" in resource_tracker._CLEANUP_FUNCS:
@@ -63,24 +49,40 @@ def remove_shm_from_resource_tracker():
 
 
 class NcclRecord(object):
-    attrs = ['call_number', 'count', 'buff1', 'buff2',
-             'datatype', 'pid', 'call_time', 'device', 'caller',
+    attrs = ['comm_addr', 'call_number', 'count', 'buff1', 'buff2',
+             'datatype', 'pid', 'call_time', 'device', 'global_rank',
              'aux', 'duration', 'num_devices', 'event_id']
 
-    def __init__(self, num_fields, max_records):
+    def __init__(self, config):
         remove_shm_from_resource_tracker()
-        self.shm_size = (num_fields * max_records + CONFIG['METADATA_FIELDS']) * SIZEOF_INT64
-        self.shm = shared_memory.SharedMemory(
-            "ncclRecord", create=False, size=self.shm_size)
+        self.shm_size = (config['NUM_FIELDS'] * config['BUFFER_SIZE'] + config['METADATA_FIELDS']) * SIZEOF_INT64
+        # Wait until the training process creates a shared memory, then we can access it.
+        shm_exists = False
+        while not shm_exists:
+            try:
+                self.shm = shared_memory.SharedMemory("ncclRecord", create=False, size=self.shm_size)
+                shm_exists = True
+            except FileNotFoundError:
+                logging.info("Shared memory not found. Waiting...")
+                time.sleep(1)  # Wait for 1 second before checking again
+        logging.info("Linked to the shm buffer!")
+
         self.data = np.frombuffer(self.shm.buf, np.int64)
-        self.buffer = self.data[CONFIG['METADATA_FIELDS']:]
+        self.buffer = self.data[config['METADATA_FIELDS']:]
         self.num_fields = self.data[0]
         self.max_records = self.data[1]
 
     def __del__(self):
         # Remove the mmap from the shared memory regions
-        del self.buffer
-        del self.data
+        if self.buffer is not None:
+            del self.buffer
+        if self.data is not None:
+            del self.data
+    
+    def clear(self):
+        self.data[2] = 0
+        self.data[3] = 0
+        self.data[4] = 0
 
     @property
     def num_records(self):
@@ -116,7 +118,7 @@ def plot_call_interval(record: NcclRecord):
     f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
     colors = ['powderblue', 'grey', 'lightblue', 'red', 'lightyellow', 'pink', 'lightgreen']
     stats = []
-    for gpu_id, per_gpu_calls in record_df.groupby('device'):
+    for global_rank, per_gpu_calls in record_df.groupby('global_rank'):
         dts = {}
         for op_id, per_op_calls in per_gpu_calls.groupby("call_number"):
             per_op_calls = per_op_calls.sort_values(by=['event_id'])
@@ -126,38 +128,48 @@ def plot_call_interval(record: NcclRecord):
             if len(dt) < 50:
                 continue
             dts[op_id] = dt
-            stats.append([gpu_id, OPS[op_id], len(dt), np.mean(dt), np.std(dt)])
-        bplot = axs[gpu_id].boxplot(
+            stats.append([global_rank, OPS[op_id], len(dt), np.mean(dt), np.std(dt)])
+        bplot = axs[global_rank].boxplot(
             list(dts.values()), notch=True, vert=True, patch_artist=True,
             showfliers=False, labels=[OPS[key] for key in dts])
         for patch, color in zip(bplot['boxes'], colors):
             patch.set_facecolor(color)
-        axs[gpu_id].set_xlabel("NCCL Operation")
-        axs[gpu_id].set_title(f"GPU {gpu_id}")
-        if gpu_id == 0:
-            axs[gpu_id].set_ylabel(r"$\Delta$ t / s")
+        axs[global_rank].set_xlabel("NCCL Operation")
+        axs[global_rank].set_title(f"GPU {global_rank}")
+        if global_rank == 0:
+            axs[global_rank].set_ylabel(r"$\Delta$ t / s")
     stats_df = pd.DataFrame(stats, columns=['GPU_ID', 'OP_ID', 'LEN', 'INTERVAL_MEAN', 'INTERVAL_STD'])
     stats_df.to_csv("logs/interval_stats.csv")
     plt.tight_layout()
     plt.savefig("figs/new_dt.png")
 
 
-def find_slow_events(record: NcclRecord):
+def detect_failslow(record: NcclRecord, plot=False):
     field_keys = record.attrs
     record_df = pd.DataFrame([i for i in record], columns=field_keys)
-    f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
-    colors = ['powderblue', 'grey', 'pink', 'green']
+    if plot:
+        f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
+        colors = ['powderblue', 'grey', 'pink', 'green']
 
-    for (gpu_id, per_gpu_record) in record_df.groupby("device"):
+    performance_drops = {}
+    for (global_rank, per_gpu_record) in record_df.groupby("global_rank"):
         per_gpu_record.sort_values(by='event_id', inplace=True)
         call_time = per_gpu_record['call_time'].to_numpy()
         call_id = per_gpu_record['call_number'].to_numpy()
         start, period = find_period(call_id, nlags=50, significance_level=0.8)
-        pargs = {"ax": axs[gpu_id], "color": colors[gpu_id], "label": f"GPU_{gpu_id}",
-                 "xlabel": "Execution Time / us", "ylabel": "Iteration Time / us"}
-        find_performance_drop(call_id, call_time, period, start, plot=True, plot_args=pargs)
-    plt.tight_layout()
-    plt.savefig("figs/period.png")
+        if period is None:
+            return None
+        if plot:
+            pargs = {"ax": axs[global_rank], "color": colors[global_rank], "label": f"GPU_{global_rank}",
+                    "xlabel": "Execution Time / us", "ylabel": "Iteration Time / us"}
+        else:
+            pargs = None
+        performance_drops[global_rank] = find_performance_drop(
+            call_id, call_time, period, start, plot=plot, plot_args=pargs)
+    if plot:
+        plt.tight_layout()
+        plt.savefig("figs/period.png")
+    return performance_drops
 
 
 def find_communication(record: NcclRecord):
@@ -166,12 +178,12 @@ def find_communication(record: NcclRecord):
     f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
     colors = ['powderblue', 'grey', 'pink', 'green']
 
-    for (gpu_id, per_gpu_record) in record_df.groupby("device"):
+    for (global_rank, per_gpu_record) in record_df.groupby("global_rank"):
         per_gpu_record.sort_values(by='event_id', inplace=True)
         call_id = per_gpu_record['call_number'].to_numpy()
         call_time = per_gpu_record['call_time'].to_numpy()
         start, period = find_period(call_id, nlags=50, significance_level=0.8)
-        print(gpu_id, start, period)
+        print(global_rank, start, period)
         comm_duration, iter_start = [], []
         for i in range(start, len(per_gpu_record), period):
             if i + period >= len(per_gpu_record):
@@ -180,13 +192,16 @@ def find_communication(record: NcclRecord):
             counts = per_gpu_record['count'][i:i+period].to_numpy()
             t_comm = np.sum(durations.astype(np.float64) / 1000.0)
             ops = per_gpu_record['call_number'][i:i+period].to_numpy()
+            print(durations, ops)
             comm_duration.append(t_comm)
             iter_start.append(call_time[i])
         comm_duration = np.array(comm_duration)
         iter_start = np.array(iter_start)
 
-        axs[gpu_id].scatter(iter_start, comm_duration, c=colors[gpu_id])
-        # print(gpu_id, np.mean(comm_duration), np.std(comm_duration), comm_duration)
+        print(global_rank, comm_duration)
+
+        axs[global_rank].scatter(iter_start, comm_duration, c=colors[global_rank])
+        # print(global_rank, np.mean(comm_duration), np.std(comm_duration), comm_duration)
     plt.tight_layout()
     plt.savefig("figs/comm.png")
 
@@ -194,7 +209,7 @@ def find_communication(record: NcclRecord):
 if __name__ == '__main__':
     logging.basicConfig(filename='logs/analyzer.log')
     logging.getLogger().setLevel(logging.INFO)
-    load_config()
-    record = NcclRecord(CONFIG['NUM_FIELDS'], CONFIG['BUFFER_SIZE'])
-    # find_slow_events(record)
-    find_communication(record)
+    conf = load_config()
+    record = NcclRecord(conf)
+    # detect_failslow(record)
+    # find_communication(record)

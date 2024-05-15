@@ -7,17 +7,18 @@
 #include <cuda.h>
 #include <cpp_redis/cpp_redis>
 #include <boost/log/trivial.hpp>
+#include "shm_topo.hpp"
 
 #define TASK_ACKED "TASK_ACKED"
 
-enum ControlState
+enum ControlState : int32_t
 {
     STATE_MONITOR  = 0,
     STATE_PROFILE  = 1,
-    STATA_VALIDATE = 2,
+    STATE_VALIDATE = 2,
 };
 
-enum ProcessRole
+enum ProcessRole : int32_t
 {
     ROLE_SENDER = 0,
     ROLE_RECVER = 1,
@@ -34,6 +35,7 @@ struct ProfileResult
 class EventHandler
 {
     ncclComm_t world_comm;
+    Communicator parsed_comm;
     std::shared_ptr<cpp_redis::client> client;
     int* control_state;
 public:
@@ -42,5 +44,5 @@ public:
     bool has_world_comm() const;
     void set_world_comm(ncclComm_t comm);
     void fetech_and_exec_task();
-    void handle_control_signal(cudaStream_t curr_stream);
+    void handle_control_signal(cudaStream_t curr_stream, ControlState* state);
 };

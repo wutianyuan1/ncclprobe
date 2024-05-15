@@ -92,7 +92,7 @@ void Communicator::debug_print()
             << "    (Ring id=" << rings[i].index << ", prev=" << rings[i].prev << ", next=" << rings[i].next << ")\n"
             << "    (Tree depth=" << trees[i].depth << ", up=" << trees[i].up << ", down=("\
             << trees[i].down[0] << ", " << trees[i].down[1] <<"))\n";
-    BOOST_LOG_TRIVIAL(info) << ss.str();
+    BOOST_LOG_TRIVIAL(debug) << ss.str();
 }
 
 
@@ -113,7 +113,7 @@ NcclTopoConnection::add_comm(Communicator& comm)
 {
     auto ret = this->find(comm.comm_addr);
     if (ret) {
-        BOOST_LOG_TRIVIAL(info) << "Communicator " << comm.comm_addr << "is found in cache, will not be repeatly added";
+        BOOST_LOG_TRIVIAL(debug) << "Communicator " << comm.comm_addr << "is found in cache, will not be repeatly added";
         return ret;
     }
     std::stringstream ss;
@@ -131,14 +131,14 @@ NcclTopoConnection::find(uint64_t comm_addr)
     client.sync_commit();
     auto reply = reply_future.get();
     if (reply.is_null()) {
-        BOOST_LOG_TRIVIAL(info) << "RANK" << get_rank(DistEngine::auto_find) << ", Communicator not found";
+        BOOST_LOG_TRIVIAL(debug) << "RANK" << get_rank(DistEngine::auto_find) << ", Communicator not found";
         return nullptr;
     }
     std::string binary_data = reply.as_string();
     std::stringstream ss(binary_data);
     std::shared_ptr<Communicator> comm(new Communicator());
     comm->from_bytes(ss);
-    BOOST_LOG_TRIVIAL(info) << "RANK" << get_rank(DistEngine::auto_find) << ", Communicator found at " << comm_addr;
+    BOOST_LOG_TRIVIAL(debug) << "RANK" << get_rank(DistEngine::auto_find) << ", Communicator found at " << comm_addr;
     return comm;
 }
 
