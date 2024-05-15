@@ -172,44 +172,46 @@ def detect_failslow(record: NcclRecord, plot=False):
     return performance_drops
 
 
-def find_communication(record: NcclRecord):
+def get_profile_results(record: NcclRecord):
     field_keys = record.attrs
     record_df = pd.DataFrame([i for i in record], columns=field_keys)
-    f, axs = plt.subplots(1, 4, sharey='row', figsize=(12, 3))
-    colors = ['powderblue', 'grey', 'pink', 'green']
+    communication_times = {}
 
     for (global_rank, per_gpu_record) in record_df.groupby("global_rank"):
         per_gpu_record.sort_values(by='event_id', inplace=True)
         call_id = per_gpu_record['call_number'].to_numpy()
-        call_time = per_gpu_record['call_time'].to_numpy()
         start, period = find_period(call_id, nlags=50, significance_level=0.8)
         print(global_rank, start, period)
-        comm_duration, iter_start = [], []
+
+        record_iter = False
         for i in range(start, len(per_gpu_record), period):
             if i + period >= len(per_gpu_record):
                 continue
-            durations = per_gpu_record['duration'][i:i+period].to_numpy()
-            counts = per_gpu_record['count'][i:i+period].to_numpy()
-            t_comm = np.sum(durations.astype(np.float64) / 1000.0)
-            ops = per_gpu_record['call_number'][i:i+period].to_numpy()
-            print(durations, ops)
-            comm_duration.append(t_comm)
-            iter_start.append(call_time[i])
-        comm_duration = np.array(comm_duration)
-        iter_start = np.array(iter_start)
+            period_table = per_gpu_record[i:i+period]
+            if np.sum(period_table['duration']) == 0:
+                continue
+            # skip additional one period
+            if record_iter == False:
+                record_iter = True
+                continue
+            for comm_addr, subtable in period_table.groupby("comm_addr"):
+                comm_duration = np.sum(subtable['duration'])
+                comm_count = np.sum(subtable['count'])
+                if comm_duration != 0.0:
+                    record_iter = True
+                if comm_addr not in communication_times:
+                    communication_times[comm_addr] = [(comm_count, comm_duration)]
+                else:
+                    communication_times[comm_addr].append((comm_count, comm_duration))
 
-        print(global_rank, comm_duration)
-
-        axs[global_rank].scatter(iter_start, comm_duration, c=colors[global_rank])
-        # print(global_rank, np.mean(comm_duration), np.std(comm_duration), comm_duration)
-    plt.tight_layout()
-    plt.savefig("figs/comm.png")
+    result = {}
+    for comm_key, comm_data in communication_times.items():
+        result[comm_key] = np.array(comm_data)
+    return result
 
 
 if __name__ == '__main__':
     logging.basicConfig(filename='logs/analyzer.log')
     logging.getLogger().setLevel(logging.INFO)
-    conf = load_config()
+    conf = load_config("./control_plane/config.json")
     record = NcclRecord(conf)
-    # detect_failslow(record)
-    # find_communication(record)

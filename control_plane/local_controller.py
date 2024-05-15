@@ -2,8 +2,11 @@ import argparse
 import time
 import logging
 import redis
+import numpy as np
 import redis.client
 import local_analyzer
+
+PROFILE_PERIOD = 20
 
 
 class LocalController(object):
@@ -26,6 +29,15 @@ class LocalController(object):
             self.reported_failslow_points.add(failslow_iter_id)
             self.global_controller_client.rpush("failslow_ranks", str(failslow_rank))
 
+    def report_profiling_result(self, profiling_result):
+        for (comm_addr, comm_array) in profiling_result.items():
+            comm_addr = str(comm_addr)
+            count_avg = np.mean(comm_array[:, 0])
+            duration_avg = np.mean(comm_array[:, 1])
+            duration_std = np.std(comm_array[:, 1])
+            result_str = f"{count_avg}_{duration_avg}_{duration_std}"
+            self.global_controller_client.set(comm_addr + "_perf", result_str)
+
     def run(self):
         logging.critical(f"[Local controller] IP={self.node_ip} is launched!")
         while True:
@@ -43,8 +55,13 @@ class LocalController(object):
                             f"Failslow happens at rank={global_rank}, detail={failslow_df}")
                         self.report_failslow(global_rank, failslow_df)
                 # If a fail-slow is detected, we first report it to the global controller.
-                # Then, we should wait until the global controller finishes its validation.
+                # Then the global controller will notify each rank to start profiling, the
+                # local side should wait it to collect some profile data and report it to global.
+                # Finally, we should wait until the global controller finishes its validation.
                 if failed_slow:
+                    time.sleep(PROFILE_PERIOD)
+                    profiling_res = local_analyzer.get_profile_results(self.record_buffer)
+                    self.report_profiling_result(profiling_res)
                     # After the global controller's validation, it will reset the failslow_ranks
                     # This should notify each local controller to proceed.
                     while self.global_controller_client.llen("failslow_ranks") != 0:
