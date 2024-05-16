@@ -7,6 +7,7 @@ import logging
 from typing import List
 from global_topo import GlobalTopo
 from task_split import split_ring
+from global_analyzer import GlobalAnalyzer
 from communicator import Communicator, deserialize_communicator_from_redis
 
 
@@ -51,6 +52,7 @@ class GlobalServer(object):
         # start server & client
         self.redis_server_prog = self.start_redis_server()
         self.storage = redis.StrictRedis(host=master_addr, port=port, db=0)
+        self.analyzer = GlobalAnalyzer(self.storage)
         self.resume_jobs()
 
     def __del__(self):
@@ -139,6 +141,10 @@ class GlobalServer(object):
             self.storage.set("global_controller", "OK")
             while True:
                 time.sleep(5)
+                comms = self.get_communicators()
+                cliques = self.analyzer.build_comm_cliques(comms)
+                for k, v in cliques.items():
+                    print("Comm", k, [i.global_rank for i in v])
                 failslow_events = self.check_failslow_events()
                 if len(failslow_events) != 0:
                     logging.info(f"[GlobalController] failslow events are reported from local: {failslow_events}")

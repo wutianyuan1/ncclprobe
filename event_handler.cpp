@@ -47,6 +47,12 @@ EventHandler::EventHandler(std::string master_addr, int port)
     world_comm = nullptr;
     client = std::shared_ptr<cpp_redis::client>(new cpp_redis::client());
     client->connect(master_addr, port);
+    if (get_rank(DistEngine::auto_find) == 0)
+    {
+        std::string world_size = std::to_string(get_world_size(DistEngine::auto_find));
+        client->set("world_size", world_size);
+        client->sync_commit();
+    }
     cudaMalloc(&this->control_state, sizeof(int) * 4);
 }
 
