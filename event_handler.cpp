@@ -2,34 +2,96 @@
 #include "comm.hpp"
 #include "utils.hpp"
 
+#define NUM_WARMUP 3
+#define NUM_REPEATS 10
 
-static void parse_task(std::string task, int* role, int* target_peer)
+static void parse_task(std::string& task, int* role, int* target_peer, uint64_t* comm_addr)
 {
-    size_t pos = task.find('_');
-    if (pos != std::string::npos) {
-        *role = std::stoi(task.substr(0, pos));
-        *target_peer = std::stoi(task.substr(pos + 1));
-    }
+    std::stringstream ss(task);
+    std::string segment;
+
+    std::getline(ss, segment, '_');
+    *role = std::stoi(segment);
+    std::getline(ss, segment, '_');
+    *target_peer = std::stoi(segment);
+    std::getline(ss, segment, '_');
+    *comm_addr = std::stoul(segment);
+    return;
 }
 
 
-ProfileResult p2p_profile_task(int role, int peer, ncclComm_t comm = nullptr, cudaStream_t stream = nullptr)
+ProfileResult p2p_profile_task(
+    int role, int peer, ncclSendFuncPtr send_func, ncclRecvFuncPtr recv_func,
+    ncclComm_t comm = nullptr, cudaStream_t stream = nullptr)
 {
-    // int* buf;
-    // cudaMalloc(&buf, 1024 * 1024);
-    
-    if (role == (int)ProcessRole::ROLE_SENDER) {
-        printf("[Rank %d] I am sender, my target is %d\n", get_rank(DistEngine::auto_find), peer);
-    } else if (role == (int)ProcessRole::ROLE_RECVER) {
-        // ncclRecv(buf, 1024 * 1024, ncclInt, peer, comm?, stream?)
-        printf("[Rank %d] I am recver, my sender is %d\n", get_rank(DistEngine::auto_find), peer);
+    int count = 20 * 1024 * 1024;
+    int *buf = nullptr;
+    cudaEvent_t start, stop;
+    float duration = 0.0f;
+    cudaMalloc(&buf, count * sizeof(int));
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    // 3 warmup runs, this will not be recorded
+    for (int i = 0; i < NUM_WARMUP; i++)
+    {
+        if (role == (int)ProcessRole::ROLE_SENDER) {
+            cudaEventRecord(start, stream);
+            ncclResult_t res = send_func(buf, count, ncclInt, peer, comm, stream);
+            cudaEventRecord(stop, stream);
+            cudaEventSynchronize(stop);
+            cudaEventElapsedTime(&duration, start, stop);
+        } else if (role == (int)ProcessRole::ROLE_RECVER) {
+            cudaEventRecord(start, stream);
+            ncclResult_t res = recv_func(buf, count, ncclInt, peer, comm, stream);
+            cudaEventRecord(stop, stream);
+            cudaEventSynchronize(stop);
+            cudaEventElapsedTime(&duration, start, stop);
+        }
     }
-    return ProfileResult(1, 2, 3);
+
+    std::vector<double> durations;
+    for (int i = 0; i < NUM_REPEATS; i++)
+    {
+        if (role == (int)ProcessRole::ROLE_SENDER) {
+            cudaEventRecord(start, stream);
+            ncclResult_t res = send_func(buf, count, ncclInt, peer, comm, stream);
+            cudaEventRecord(stop, stream);
+            cudaEventSynchronize(stop);
+            cudaEventElapsedTime(&duration, start, stop);
+            durations.push_back(duration);
+            // printf("[Rank %d] I am sender, my target is %d, addr is %p, result is %d, duration=%f\n",
+            //     get_rank(DistEngine::auto_find), peer, comm, 0, duration);
+        } else if (role == (int)ProcessRole::ROLE_RECVER) {
+            cudaEventRecord(start, stream);
+            ncclResult_t res = recv_func(buf, count, ncclInt, peer, comm, stream);
+            cudaEventRecord(stop, stream);
+            cudaEventSynchronize(stop);
+            cudaEventElapsedTime(&duration, start, stop);
+            durations.push_back(duration);
+            // printf("[Rank %d] I am receiver, my sender is %d, addr is %p, result is %d, duration=%f\n",
+            //     get_rank(DistEngine::auto_find), peer, comm, 0, duration);
+        }
+    }
+
+    // Find min, max, and average
+    double min = *std::min_element(durations.begin(), durations.end());
+    double max = *std::max_element(durations.begin(), durations.end());
+    double avg = std::accumulate(durations.begin(), durations.end(), 0.0) / durations.size();
+
+    // Find standard deviation
+    double sum = 0.0;
+    for (double duration : durations) {
+        sum += (duration - avg) * (duration - avg);
+    }
+    double std_dev = sqrt(sum / durations.size());
+
+    return ProfileResult(min, max, avg, std_dev);
 }
 
 
-ProfileResult::ProfileResult(double minl, double maxl, double avgl)
-    : min_lat(minl), max_lat(maxl), avg_lat(avgl) 
+ProfileResult::ProfileResult(double minl, double maxl, double avgl, double stdl)
+    : min_lat(minl), max_lat(maxl), avg_lat(avgl), std_lat(stdl)
 {};
 
 std::string ProfileResult::serialize()
@@ -38,13 +100,16 @@ std::string ProfileResult::serialize()
     ss.write(reinterpret_cast<const char*>(&min_lat), sizeof(min_lat));
     ss.write(reinterpret_cast<const char*>(&max_lat), sizeof(max_lat));
     ss.write(reinterpret_cast<const char*>(&avg_lat), sizeof(avg_lat));
+    ss.write(reinterpret_cast<const char*>(&std_lat), sizeof(std_lat));
     return ss.str();
 }
 
 
-EventHandler::EventHandler(std::string master_addr, int port)
+EventHandler::EventHandler(std::string master_addr, int port, ncclSendFuncPtr sptr, ncclRecvFuncPtr rptr)
 {
     world_comm = nullptr;
+    send_ptr = sptr;
+    recv_ptr = rptr;
     client = std::shared_ptr<cpp_redis::client>(new cpp_redis::client());
     client->connect(master_addr, port);
     if (get_rank(DistEngine::auto_find) == 0)
@@ -85,6 +150,9 @@ void EventHandler::fetech_and_exec_task()
         }
     );
     client->sync_commit();
+    // skip emptys
+    if (task_content.length() <= 5)
+        return;
 
     // If a task is already acked by the worker, just skip it.
     if (task_content.size() >= 10 && task_content == std::string(TASK_ACKED))
@@ -94,10 +162,12 @@ void EventHandler::fetech_and_exec_task()
     client->sync_commit();
 
     int role, peer;
-    parse_task(task_content, &role, &peer);
+    uint64_t comm_addr;
+    parse_task(task_content, &role, &peer, &comm_addr);
     // Perform p2p send/recv job and get exec time metrics
-    // FIXME: pass correct comm and stream
-    auto result = p2p_profile_task(role, peer, nullptr, nullptr);
+    auto result = p2p_profile_task(role, peer,
+        this->send_ptr, this->recv_ptr,
+        reinterpret_cast<ncclComm_t>(comm_addr), cudaStreamLegacy);
     // Add the result to redis
     client->set(task_name + std::string("_result"), result.serialize());
     client->sync_commit();

@@ -207,6 +207,7 @@ ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatyp
 {
     RETRIEVE_NCCL_FUNC(ncclSend);
 
+    using func_t = typeof(ncclSend);
     g_status.add_timing_event(NcclNumber::SEND, count, stream);
     auto ret = (*real_func)(sendbuff, count, datatype, peer, comm, stream);
     log_event(sendbuff, nullptr, count, datatype, comm, stream, NcclNumber::SEND, (uint64_t)peer);
@@ -305,6 +306,10 @@ ncclResult_t ncclGroupEnd()
     RETRIEVE_NCCL_FUNC(ncclGroupEnd);
 
     auto ret = (*real_func)();
+
+    if (g_status.transparent)
+        return ret;
+
     double t = g_status.get_communication_time();
 
     if (g_status.state == ControlState::STATE_MONITOR)
@@ -335,7 +340,9 @@ ncclResult_t ncclGroupEnd()
 
     // Check whether to change state / do validation
     if (g_status.should_check) {
+        g_status.transparent = true;
         g_status.event_handler->handle_control_signal(g_status.curr_stream, &g_status.state);
+        g_status.transparent = false;
         g_status.should_check = false;
     }
     

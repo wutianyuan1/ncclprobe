@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <cmath>
+#include <nccl.h>
 
 // floating point comparison
 #define FLOAT_EQ(a, b) (fabs((a) - (b)) < 1e-4)
@@ -11,6 +12,9 @@ enum DistEngine{
     torch_run = 2,
     auto_find = 3
 };
+
+typedef ncclResult_t (*ncclSendFuncPtr)(const void* sendbuff, size_t count, ncclDataType_t datatype, int peer, ncclComm_t comm, cudaStream_t stream);
+typedef ncclResult_t (*ncclRecvFuncPtr)(const void* recvbuff, size_t count, ncclDataType_t datatype, int peer, ncclComm_t comm, cudaStream_t stream);
 
 
 inline int get_int_value_from_env(DistEngine dist, const char* mpi_choice, const char* torchrun_choice)

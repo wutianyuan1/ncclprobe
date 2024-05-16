@@ -2,12 +2,14 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <numeric>
 #include <sstream>
 #include <nccl.h>
 #include <cuda.h>
 #include <cpp_redis/cpp_redis>
 #include <boost/log/trivial.hpp>
 #include "shm_topo.hpp"
+#include "utils.hpp"
 
 #define TASK_ACKED "TASK_ACKED"
 
@@ -26,9 +28,9 @@ enum ProcessRole : int32_t
 
 struct ProfileResult
 {
-    double min_lat, max_lat, avg_lat;
+    double min_lat, max_lat, avg_lat, std_lat;
     ProfileResult() = default;
-    ProfileResult(double minl, double maxl, double avgl);
+    ProfileResult(double minl, double maxl, double avgl, double stdl);
     std::string serialize();
 };
 
@@ -38,8 +40,10 @@ class EventHandler
     Communicator parsed_comm;
     std::shared_ptr<cpp_redis::client> client;
     int* control_state;
+    ncclSendFuncPtr send_ptr;
+    ncclRecvFuncPtr recv_ptr;
 public:
-    EventHandler(std::string master_addr, int port);
+    EventHandler(std::string master_addr, int port, ncclSendFuncPtr sptr, ncclRecvFuncPtr rptr);
     ~EventHandler();
     bool has_world_comm() const;
     void set_world_comm(ncclComm_t comm);

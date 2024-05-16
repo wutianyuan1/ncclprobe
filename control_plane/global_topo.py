@@ -16,7 +16,8 @@ class GlobalTopo(object):
             else:
                 self.comms_by_id_hash[comm.id_hash] = [comm]
         self.rings = self.build_rings(self.comms_by_id_hash)
-        self.trees = self.build_trees(self.comms_by_id_hash)
+        # FIXME: modify it to real trees
+        self.trees = self.rings #self.build_trees(self.comms_by_id_hash)
 
     def build_rings(self, comms_by_id_hash: Dict[int, List[Communicator]]):
         rings = []
@@ -44,6 +45,6 @@ class GlobalTopo(object):
         
 
     def build_trees(self, comms_by_id_hash: Dict[int, List[Communicator]]):
-        rings = []
+        trees = []
         for (id_hash, comms) in comms_by_id_hash.items():
             pass

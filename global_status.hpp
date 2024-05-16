@@ -60,6 +60,7 @@ struct GlobalStatus {
     // To implement worker-side response to controllers
     std::shared_ptr<EventHandler> event_handler;
     bool should_check;
+    bool transparent;
 
     // global controller & local controllers
     std::shared_ptr<boost::process::child> global_controller_proc;

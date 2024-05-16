@@ -2,12 +2,11 @@ import time
 import argparse
 import subprocess
 import redis
-import struct
 import logging
 from typing import List
 from global_topo import GlobalTopo
 from task_split import split_ring
-from global_analyzer import GlobalAnalyzer
+from global_analyzer import GlobalAnalyzer, PerformanceMetric
 from communicator import Communicator, deserialize_communicator_from_redis
 
 
@@ -22,25 +21,6 @@ class ProcessRole:
     ROLE_RECVER = 1
     ROLE_ACKED  = 10086
 
-
-class PerformanceMetric(object):
-    def __init__(self, min_lat, max_lat, avg_lat) -> None:
-        self.min_lat = min_lat
-        self.max_lat = max_lat
-        self.avg_lat = avg_lat
-
-    @classmethod
-    def from_bytes(cls, redis_data):
-        data = struct.unpack('ddd', redis_data[:24])
-        return PerformanceMetric(*data)
-    
-    def __repr__(self):
-        return str(self)
-
-    def __str__(self):
-        return f"(Perf: min={self.min_lat}, max={self.max_lat}, avg={self.avg_lat})"
-
-
 class GlobalServer(object):
     def __init__(self, log_path, master_addr, port) -> None:
         log_ip = master_addr.replace('.', '_')
@@ -53,7 +33,7 @@ class GlobalServer(object):
         self.redis_server_prog = self.start_redis_server()
         self.storage = redis.StrictRedis(host=master_addr, port=port, db=0)
         self.analyzer = GlobalAnalyzer(self.storage)
-        self.resume_jobs()
+        self.set_monitoring()
 
     def __del__(self):
         self.redis_server_prog.terminate()
@@ -70,27 +50,26 @@ class GlobalServer(object):
             comm = deserialize_communicator_from_redis(
                 self.storage.get(key)
             )
-            if comm.num_devices != 1:
-                comms.append(comm)
+            comms.append(comm)
         return comms
 
-    def pause_jobs(self):
+    def pause_training(self):
         self.storage.set("control_state", str(ControlState.STATE_VALIDATE))
 
-    def start_profile(self):
+    def set_profiling(self):
         self.storage.set("control_state", str(ControlState.STATE_PROFILE))
     
-    def resume_jobs(self):
+    def set_monitoring(self):
         self.storage.set("control_state", str(ControlState.STATE_MONITOR))
     
-    def dispatch_task(self, task):
+    def dispatch_task(self, task, comm_addrs):
         senders, recvers = task
         for (s, r) in zip(senders, recvers):
             self.storage.set(
-                f"validtask_rank_{s}", f"{ProcessRole.ROLE_SENDER}_{r}"
+                f"validtask_rank_{s}", f"{ProcessRole.ROLE_SENDER}_{r}_{comm_addrs[s]}"
             )
             self.storage.set(
-                f"validtask_rank_{r}", f"{ProcessRole.ROLE_RECVER}_{s}"
+                f"validtask_rank_{r}", f"{ProcessRole.ROLE_RECVER}_{s}_{comm_addrs[r]}"
             )
         logging.info(f"task {task} dispatched!")
 
@@ -117,34 +96,48 @@ class GlobalServer(object):
         time.sleep(1)
         return redis_prog
     
-    def validate_ring(self, ring):
+    def validate_ring(self, ring, comm_addrs):
         tasks = split_ring(ring)
-        print(ring, tasks)
+        logging.info(f"validatiing ring:{ring}, the corresponding tasks are {tasks}")
         for task in tasks:
-            self.dispatch_task(task)
+            self.dispatch_task(task, comm_addrs)
             self.get_task_result(task)
             logging.info("*" * 20 + "task completed!" + "*" * 20)
+    
+    def validate_tree(self, tree, comm_addrs):
+        return
 
     def handle_failslow(self, failslow_events):
         # Fisrt, we enables profile mode to enable CUDA events and collect kernel durations
-        self.start_profile()
-        # TODO: (1) get profile results
-        # TODO: (2) analyze profile results and determine which ring/tree to validate
-        # TODO: (3) dispatch validation jobs and collect validation results
-        time.sleep(20)
+        self.set_profiling()
+        # (1) wait and get profile results
+        perfs = self.analyzer.wait_and_build_performance_map()
+        comms = self.get_communicators()
+        cliques = self.analyzer.build_comm_cliques(comms)
+        # (2) analyze profile results and determine which ring/tree to validate
+        slow_cliques = self.analyzer.find_slow_clique(perfs, cliques)
+        validate_topos = [(c, GlobalTopo(c.comms)) for c in slow_cliques]
+        # (3) dispatch validation jobs and collect validation results
+        self.pause_training()
+        time.sleep(1)
+        for clique, topo in validate_topos:
+            # Skip single-element ring/trees
+            if len(topo.rings[0]) == 1 or len(topo.trees[0]) == 1:
+                continue
+            comm_addrs = {}
+            for cm in clique.comms:
+                comm_addrs[cm.group_rank] = cm.comm_addr
+            self.validate_ring(topo.rings[0], comm_addrs)
+            self.validate_tree(topo.trees[0], comm_addrs)
         # Finally, clear the failed slow events and resume all jobs to monitoring state
         self.storage.ltrim("failslow_ranks", 1, 0)
-        self.resume_jobs()
+        self.set_monitoring()
 
     def run(self):
         try:
             self.storage.set("global_controller", "OK")
             while True:
                 time.sleep(5)
-                comms = self.get_communicators()
-                cliques = self.analyzer.build_comm_cliques(comms)
-                for k, v in cliques.items():
-                    print("Comm", k, [i.global_rank for i in v])
                 failslow_events = self.check_failslow_events()
                 if len(failslow_events) != 0:
                     logging.info(f"[GlobalController] failslow events are reported from local: {failslow_events}")

@@ -10,8 +10,8 @@
 
 
 #define N_REPEAT 3000000
-#define SNEDPEER 3
-#define RECVPEER 2
+#define SENDPEER 2
+#define RECVPEER 3
 
 #define MPICHECK(cmd) do {                          \
   int e = cmd;                                      \
@@ -143,33 +143,33 @@ int main(int argc, char* argv[])
   // Communicating using NCCL within sub-communicators
   // int nn = myRank == 1 ? N_REPEAT : N_REPEAT - 1;
   for (int i = 0; i < N_REPEAT; i++) {
-    // cudaEvent_t start, stop;
-    // float duration;
-    // cudaEventCreate(&start);
-    // cudaEventCreate(&stop);
+    cudaEvent_t start, stop;
+    float duration;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
     
-    // if (myRank == SNEDPEER) {
-    //   sleep(1);
-    //   cudaEventRecord(start, s);
-    //   NCCLCHECK(ncclSend(sendbuff, size, ncclFloat, RECVPEER, comm, s));
-    //   cudaEventRecord(stop, s);
+    if (myRank == SENDPEER) {
+      cudaEventRecord(start, s);
+      NCCLCHECK(ncclSend(sendbuff, size, ncclFloat, RECVPEER, comm, s));
+      cudaEventRecord(stop, s);
       
-    // } else if (myRank == RECVPEER) {
-    //   cudaEventRecord(start, s);
-    //   NCCLCHECK(ncclRecv(recvbuff, size, ncclFloat, SNEDPEER, comm, s));
-    //   cudaEventRecord(stop, s);
-    // } else {
-    //   cudaEventRecord(start, s);
-    //   cudaEventRecord(stop, s);
-    // }
-    // cudaEventSynchronize(stop);
-    // cudaEventElapsedTime(&duration, start, stop);
-    // printf("Rank %d, time: %f\n", myRank, duration);
+    } else if (myRank == RECVPEER) {
+      cudaEventRecord(start, s);
+      NCCLCHECK(ncclRecv(recvbuff, size, ncclFloat, SENDPEER, comm, s));
+      cudaEventRecord(stop, s);
+    } else {
+      cudaEventRecord(start, s);
+      cudaEventRecord(stop, s);
+    }
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&duration, start, stop);
+    if (myRank == SENDPEER || myRank == RECVPEER)
+      printf("Rank %d, time: %f\n", myRank, duration);
 
-    NCCLCHECK(ncclGroupStart());
-    NCCLCHECK(ncclAllReduce((const void*)sendbuff, (void*)recvbuff, size, ncclFloat, ncclAvg, comm, s));
-    NCCLCHECK(ncclGroupEnd());
-    printf("Rank %d, allreduce: %d\n", myRank, i);
+    // NCCLCHECK(ncclGroupStart());
+    // NCCLCHECK(ncclAllReduce((const void*)sendbuff, (void*)recvbuff, size, ncclFloat, ncclAvg, comm, s));
+    // NCCLCHECK(ncclGroupEnd());
+    // printf("Rank %d, allreduce: %d\n", myRank, i);
   }
 
   // Completing NCCL operation by synchronizing on the CUDA stream

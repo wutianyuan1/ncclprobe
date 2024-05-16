@@ -81,8 +81,11 @@ void GlobalStatus::initialize(const char* nccl_path_)
 
     // Initialize interaction compoent
     this->should_check = false;
+    this->transparent = false;
     this->event_handler = std::shared_ptr<EventHandler>(
-        new EventHandler("127.0.0.1", 6379)
+        new EventHandler("127.0.0.1", 6379,
+            reinterpret_cast<ncclSendFuncPtr>(get_function_ptr("ncclSend")),
+            reinterpret_cast<ncclRecvFuncPtr>(get_function_ptr("ncclRecv")))
     );
 
     // Set the running state to "MONITOR"

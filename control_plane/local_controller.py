@@ -32,11 +32,12 @@ class LocalController(object):
     def report_profiling_result(self, profiling_result):
         for (comm_addr, comm_array) in profiling_result.items():
             comm_addr = str(comm_addr)
-            count_avg = np.mean(comm_array[:, 0])
+            duration_min = np.min(comm_array[:, 1])
+            duration_max = np.max(comm_array[:, 1])
             duration_avg = np.mean(comm_array[:, 1])
             duration_std = np.std(comm_array[:, 1])
-            result_str = f"{count_avg}_{duration_avg}_{duration_std}"
-            self.global_controller_client.set(comm_addr + "_perf", result_str)
+            result_str = f"{duration_min}_{duration_max}_{duration_avg}_{duration_std}"
+            self.global_controller_client.set("Perf_" + comm_addr, result_str)
 
     def run(self):
         logging.critical(f"[Local controller] IP={self.node_ip} is launched!")
