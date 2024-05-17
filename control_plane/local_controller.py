@@ -4,7 +4,7 @@ import logging
 import redis
 import numpy as np
 import redis.client
-import local_analyzer
+from . import local_analyzer
 
 PROFILE_PERIOD = 20
 

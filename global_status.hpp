@@ -66,6 +66,8 @@ struct GlobalStatus {
     std::shared_ptr<boost::process::child> global_controller_proc;
     std::shared_ptr<boost::process::child> local_controller_proc;
 private:
+    int install_python_packages(std::string whl_path);
+    void wait_installation_done();
     int start_global_controller();
     int start_local_controller();
 public:

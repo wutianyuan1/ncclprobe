@@ -4,10 +4,10 @@ import subprocess
 import redis
 import logging
 from typing import List, Dict
-from global_topo import GlobalTopo
-from task_split import split_ring
-from global_analyzer import GlobalAnalyzer, PerformanceMetric, CommunicatorClique
-from communicator import Communicator, deserialize_communicator_from_redis
+from .global_topo import GlobalTopo
+from .task_split import split_ring
+from .global_analyzer import GlobalAnalyzer, PerformanceMetric, CommunicatorClique
+from .communicator import Communicator, deserialize_communicator_from_redis
 
 
 class ControlState:
@@ -74,6 +74,16 @@ class GlobalServer(object):
             self.storage.set(
                 f"validtask_rank_{recver_global_rank}", f"{ProcessRole.ROLE_RECVER}_{s}_{comm_addrs[r]}"
             )
+        # wait unitl all ranks acked the task
+        for (s, r) in zip(senders, recvers):
+            sender_global_rank = group2global[s]
+            recver_global_rank = group2global[r]
+            while True:
+                sender_ret = self.storage.get(f"validtask_rank_{sender_global_rank}").decode()
+                recver_ret = self.storage.get(f"validtask_rank_{recver_global_rank}").decode()
+                if sender_ret == 'TASK_ACKED' and recver_ret == 'TASK_ACKED':
+                    break
+                time.sleep(1)
         logging.info(f"task {task} dispatched!")
 
     def get_task_result(self, task, group2global):

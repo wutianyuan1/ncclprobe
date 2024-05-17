@@ -28,6 +28,12 @@ void GlobalStatus::initialize(const char* nccl_path_)
         boost::log::trivial::severity >= boost::log::trivial::info
     );
 
+    // Install the required controller packages for each node
+    if (get_local_rank(DistEngine::auto_find) == 0)
+        install_python_packages("/workspace/ncclprobe/dist/control_plane-1.0-py3-none-any.whl");
+    else
+        wait_installation_done(); // other processes should wait the installation to complete
+
     // start the global controller if it is the master rank (rank 0)
     if (get_rank(DistEngine::auto_find) == 0)
         start_global_controller();
@@ -97,11 +103,36 @@ void GlobalStatus::initialize(const char* nccl_path_)
     BOOST_LOG_TRIVIAL(info) << "Rank: " << get_rank(DistEngine::auto_find) << ", global Status initialized!!" << std::endl;
 }
 
+int GlobalStatus::install_python_packages(std::string whl_path)
+{
+    namespace bp = boost::process;
+    std::vector<std::string> args {
+        "install", whl_path
+    };
+    auto install_process = bp::child(bp::search_path("pip"), args);
+    install_process.wait();
+    int ext_code = install_process.exit_code();
+    BOOST_LOG_TRIVIAL(info) << "[Local Master rank] Controller packages installed";
+    return ext_code;
+}
+
+void GlobalStatus::wait_installation_done() {
+    namespace bp = boost::process;
+    while (1)
+    {
+        bp::child c("pip show control-plane");
+        c.wait();
+        if (c.exit_code() == 0)
+            break;
+        sleep(2);
+    }
+}
+
 int GlobalStatus::start_global_controller()
 {
     namespace bp = boost::process;
     std::vector<std::string> args {
-        "-c", "python /workspace/ncclprobe/control_plane/global_controller.py"
+        "-c", "global_controller"
     };
     global_controller_proc = std::shared_ptr<bp::child>(new bp::child(bp::search_path("sh"), args));
     BOOST_LOG_TRIVIAL(info) << "[Master rank] Global controller started";
@@ -112,7 +143,7 @@ int GlobalStatus::start_local_controller()
 {
     namespace bp = boost::process;
     std::vector<std::string> args {
-        "-c", "python /workspace/ncclprobe/control_plane/local_controller.py"
+        "-c", "local_controller"
     };
     local_controller_proc = std::shared_ptr<bp::child>(new bp::child(bp::search_path("sh"), args));
     BOOST_LOG_TRIVIAL(info) << "[Local Master rank] Local controller started";

@@ -1,5 +1,5 @@
 from typing import List, Dict
-from communicator import Communicator, RingNode, TreeNode
+from .communicator import Communicator, RingNode, TreeNode
 
 
 def ring_key(ring: List[int]):

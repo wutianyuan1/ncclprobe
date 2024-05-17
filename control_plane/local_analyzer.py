@@ -4,7 +4,7 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from slow_detection import find_period, find_performance_drop
+from .slow_detection import find_period, find_performance_drop
 from multiprocessing import shared_memory, resource_tracker
 
 OPS = ['Send', 'Recv', 'Bcast', 'Broadcast', 'AllGather', 'ReduceScatter', 'AllReduce']
@@ -74,6 +74,8 @@ class NcclRecord(object):
 
     def __del__(self):
         # Remove the mmap from the shared memory regions
+        if not hasattr(self, 'buffer'):
+            return
         if self.buffer is not None:
             del self.buffer
         if self.data is not None:

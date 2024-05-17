@@ -3,7 +3,7 @@ import time
 import struct
 import logging
 import numpy as np
-from communicator import Communicator
+from .communicator import Communicator
 from typing import List, Dict
 
 
