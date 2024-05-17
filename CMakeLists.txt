@@ -32,7 +32,7 @@ link_directories(${CUDA_LIBRARIES})
 
 
 ## The intercept library
-add_library(ncclprobe SHARED ncclprobe.cpp shm_storage.cpp global_status.cpp comm.cpp shm_topo.cpp event_handler.cpp)
+add_library(ncclprobe SHARED ncclprobe.cpp shm_storage.cpp global_status.cpp comm.cpp shm_topo.cpp event_handler.cpp matmul.cu)
 # H100/H800: 90, RTX40*: 89, A10: 86, A100/A30: 80, V100: 70
 set_target_properties(ncclprobe PROPERTIES CUDA_ARCHITECTURES "70;80;86;89;90")
 target_link_libraries(ncclprobe ${CUDA_LIBRARIES} ${MPI_CXX_LIBRARIES} ${CPPREDIS_LIBRARY} ${TACOPIE_LIBRARY} Boost::log)

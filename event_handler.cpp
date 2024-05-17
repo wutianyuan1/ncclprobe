@@ -1,9 +1,11 @@
 #include "event_handler.hpp"
 #include "comm.hpp"
 #include "utils.hpp"
+#include "matmul.cuh"
 
 #define NUM_WARMUP 3
 #define NUM_REPEATS 10
+#define MATRIX_N 4096
 
 static void parse_task(std::string& task, int* role, int* target_peer, uint64_t* comm_addr)
 {
@@ -161,16 +163,26 @@ void EventHandler::fetech_and_exec_task()
     client->set(task_name, TASK_ACKED);
     client->sync_commit();
 
-    int role, peer;
-    uint64_t comm_addr;
-    parse_task(task_content, &role, &peer, &comm_addr);
-    // Perform p2p send/recv job and get exec time metrics
-    auto result = p2p_profile_task(role, peer,
-        this->send_ptr, this->recv_ptr,
-        reinterpret_cast<ncclComm_t>(comm_addr), cudaStreamLegacy);
-    // Add the result to redis
-    client->set(task_name + std::string("_result"), result.serialize());
-    client->sync_commit();
+    if (task_content == "ComputationTest")
+    {
+        auto result = perf_gemm(MATRIX_N);
+        // Add the result to redis
+        client->set(task_name + std::string("_result"), result.serialize());
+        client->sync_commit();
+    }
+    else
+    {
+        int role, peer;
+        uint64_t comm_addr;
+        parse_task(task_content, &role, &peer, &comm_addr);
+        // Perform p2p send/recv job and get exec time metrics
+        auto result = p2p_profile_task(role, peer,
+            this->send_ptr, this->recv_ptr,
+            reinterpret_cast<ncclComm_t>(comm_addr), cudaStreamLegacy);
+        // Add the result to redis
+        client->set(task_name + std::string("_result"), result.serialize());
+        client->sync_commit();
+    }
 }
 
 void EventHandler::handle_control_signal(cudaStream_t curr_stream, ControlState* state)

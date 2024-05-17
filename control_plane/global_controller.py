@@ -118,6 +118,32 @@ class GlobalServer(object):
             self.get_task_result(task, group2global)
             logging.info("*" * 20 + "task completed!" + "*" * 20)
     
+    def validate_computation(self):
+        world_size = self.analyzer.world_size
+        for i in range(world_size):
+            self.storage.set(
+                f"validtask_rank_{i}", "ComputationTest"
+            )
+
+        # wait unitl all ranks acked the task
+        for i in range(world_size):
+            while True:
+                comp_ret = self.storage.get(f"validtask_rank_{i}").decode()
+                if comp_ret == 'TASK_ACKED':
+                    break
+                time.sleep(1)
+        logging.info(f"Computation tasks are dispatched!")
+
+        results = {}
+        while len(results) != world_size:
+            for r in range(world_size):
+                res = self.storage.get(f"validtask_rank_{r}_result")
+                if res is not None:
+                    results[r] = PerformanceMetric.from_bytes(res)
+                    logging.info(f"Computation result of rank {r} collected = {results[r]}!!")
+            time.sleep(0.5)
+
+
     def validate_tree(self, tree, comm_addrs, group2global):
         return
 
@@ -163,6 +189,10 @@ class GlobalServer(object):
         # Dispatch validation jobs and collect validation results
         self.pause_training()
         time.sleep(1)
+
+        # First, check computation performance
+        self.validate_computation()
+
         for clique, topo in validate_topos:
             # Skip single-element ring/trees
             if len(topo.rings[0]) == 1 or len(topo.trees[0]) == 1:
