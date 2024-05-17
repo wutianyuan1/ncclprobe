@@ -3,10 +3,10 @@ import argparse
 import subprocess
 import redis
 import logging
-from typing import List
+from typing import List, Dict
 from global_topo import GlobalTopo
 from task_split import split_ring
-from global_analyzer import GlobalAnalyzer, PerformanceMetric
+from global_analyzer import GlobalAnalyzer, PerformanceMetric, CommunicatorClique
 from communicator import Communicator, deserialize_communicator_from_redis
 
 
@@ -33,6 +33,7 @@ class GlobalServer(object):
         self.redis_server_prog = self.start_redis_server()
         self.storage = redis.StrictRedis(host=master_addr, port=port, db=0)
         self.analyzer = GlobalAnalyzer(self.storage)
+        self.precheck = False
         self.set_monitoring()
 
     def __del__(self):
@@ -62,23 +63,26 @@ class GlobalServer(object):
     def set_monitoring(self):
         self.storage.set("control_state", str(ControlState.STATE_MONITOR))
     
-    def dispatch_task(self, task, comm_addrs):
+    def dispatch_task(self, task, comm_addrs, group2global):
         senders, recvers = task
         for (s, r) in zip(senders, recvers):
+            sender_global_rank = group2global[s]
+            recver_global_rank = group2global[r]
             self.storage.set(
-                f"validtask_rank_{s}", f"{ProcessRole.ROLE_SENDER}_{r}_{comm_addrs[s]}"
+                f"validtask_rank_{sender_global_rank}", f"{ProcessRole.ROLE_SENDER}_{r}_{comm_addrs[s]}"
             )
             self.storage.set(
-                f"validtask_rank_{r}", f"{ProcessRole.ROLE_RECVER}_{s}_{comm_addrs[r]}"
+                f"validtask_rank_{recver_global_rank}", f"{ProcessRole.ROLE_RECVER}_{s}_{comm_addrs[r]}"
             )
         logging.info(f"task {task} dispatched!")
 
-    def get_task_result(self, task):
+    def get_task_result(self, task, group2global):
         senders, recvers = task
         all_ranks = set(senders + recvers)
         results = {}
         while len(results) != len(all_ranks):
-            for r in all_ranks:
+            for group_rank in all_ranks:
+                r = group2global[group_rank]
                 res = self.storage.get(f"validtask_rank_{r}_result")
                 if res is not None:
                     results[r] = PerformanceMetric.from_bytes(res)
@@ -96,15 +100,15 @@ class GlobalServer(object):
         time.sleep(1)
         return redis_prog
     
-    def validate_ring(self, ring, comm_addrs):
+    def validate_ring(self, ring, comm_addrs, group2global):
         tasks = split_ring(ring)
-        logging.info(f"validatiing ring:{ring}, the corresponding tasks are {tasks}")
+        logging.info(f"validating ring:{ring}, the corresponding tasks are {tasks}")
         for task in tasks:
-            self.dispatch_task(task, comm_addrs)
-            self.get_task_result(task)
+            self.dispatch_task(task, comm_addrs, group2global)
+            self.get_task_result(task, group2global)
             logging.info("*" * 20 + "task completed!" + "*" * 20)
     
-    def validate_tree(self, tree, comm_addrs):
+    def validate_tree(self, tree, comm_addrs, group2global):
         return
 
     def handle_failslow(self, failslow_events):
@@ -132,12 +136,47 @@ class GlobalServer(object):
         # Finally, clear the failed slow events and resume all jobs to monitoring state
         self.storage.ltrim("failslow_ranks", 1, 0)
         self.set_monitoring()
+    
+    def do_precheck(self):
+        # In pre-check, we validate all rings/trees that NCCL built
+        comms = self.get_communicators()
+        all_cliques: Dict[int, CommunicatorClique] =\
+            self.analyzer.build_comm_cliques(comms)
+        unique_cliques: List[CommunicatorClique] = []
+        unique_ids = set()
+        for c in all_cliques.values():
+            if c.clique_id not in unique_ids and len(c.ranks) > 1:
+                unique_ids.add(c.clique_id)
+                unique_cliques.append(c)
+        logging.info(f"All rings: {unique_cliques}")
+        validate_topos = [(c, GlobalTopo(c.comms)) for c in unique_cliques]
+        # Dispatch validation jobs and collect validation results
+        self.pause_training()
+        time.sleep(1)
+        for clique, topo in validate_topos:
+            # Skip single-element ring/trees
+            if len(topo.rings[0]) == 1 or len(topo.trees[0]) == 1:
+                continue
+            comm_addrs = {}
+            group2global = {}
+            for cm in clique.comms:
+                comm_addrs[cm.group_rank] = cm.comm_addr
+                group2global[cm.group_rank] = cm.global_rank
+            self.validate_ring(topo.rings[0], comm_addrs, group2global)
+            self.validate_tree(topo.trees[0], comm_addrs, group2global)
+        # Finally, clear the failed slow events and resume all jobs to monitoring state
+        self.set_monitoring()
 
     def run(self):
         try:
             self.storage.set("global_controller", "OK")
             while True:
                 time.sleep(5)
+                if not self.precheck:
+                    # wait additional 5 seconds to ensure all comms are built.
+                    time.sleep(5)
+                    self.precheck = True
+                    self.do_precheck()
                 failslow_events = self.check_failslow_events()
                 if len(failslow_events) != 0:
                     logging.info(f"[GlobalController] failslow events are reported from local: {failslow_events}")

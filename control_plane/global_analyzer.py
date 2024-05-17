@@ -38,6 +38,10 @@ class CommunicatorClique(object):
         self.pp_stage = pp_stage
 
     @property
+    def clique_id(self):
+        return tuple(self.ranks)
+
+    @property
     def tag(self):
         if self.is_special:
             return f"special_{self.ranks}"
