@@ -5,6 +5,7 @@ SET(CMAKE_BUILD_TYPE "DEBUG")
 enable_language(CUDA)
 set_source_files_properties(*.cpp PROPERTIES LANGUAGE CUDA)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+set(Boost_USE_STATIC_LIBS   ON)
 
 # required libs: cuda, nccl, mpi
 find_package(NCCL REQUIRED)
@@ -35,7 +36,7 @@ link_directories(${CUDA_LIBRARIES})
 add_library(ncclprobe SHARED ncclprobe.cpp shm_storage.cpp global_status.cpp comm.cpp shm_topo.cpp event_handler.cpp matmul.cu)
 # H100/H800: 90, RTX40*: 89, A10: 86, A100/A30: 80, V100: 70
 set_target_properties(ncclprobe PROPERTIES CUDA_ARCHITECTURES "70;80;86;89;90")
-target_link_libraries(ncclprobe ${CUDA_LIBRARIES} ${MPI_CXX_LIBRARIES} ${CPPREDIS_LIBRARY} ${TACOPIE_LIBRARY} Boost::log)
+target_link_libraries(ncclprobe ${CUDA_LIBRARIES} ${CPPREDIS_LIBRARY} ${TACOPIE_LIBRARY} Boost::log)
 
 ## The allreduce test program
 add_executable(test test.cu)

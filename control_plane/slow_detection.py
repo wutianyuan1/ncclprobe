@@ -81,7 +81,7 @@ def validate_performance_drop(
             rows_to_remove.append(i)
         else:
             logging.info(
-                f"Find valid change point {curr_cp(i)}, at time: {iter_start[curr_cp(i)]}")
+                f"Find valid change point {curr_cp(i)}, at time: {iter_start[curr_cp(i)]}, degradation={degradation}")
     change_point_df.drop(rows_to_remove, inplace=True)
     return change_point_df
 

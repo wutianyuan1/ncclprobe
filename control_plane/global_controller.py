@@ -63,7 +63,7 @@ class GlobalServer(object):
     def set_monitoring(self):
         self.storage.set("control_state", str(ControlState.STATE_MONITOR))
     
-    def dispatch_task(self, task, comm_addrs, group2global):
+    def dispatch_comm_task(self, task, comm_addrs, group2global):
         senders, recvers = task
         for (s, r) in zip(senders, recvers):
             sender_global_rank = group2global[s]
@@ -86,7 +86,7 @@ class GlobalServer(object):
                 time.sleep(1)
         logging.info(f"task {task} dispatched!")
 
-    def get_task_result(self, task, group2global):
+    def collect_comm_task_results(self, task, group2global):
         senders, recvers = task
         all_ranks = set(senders + recvers)
         results = {}
@@ -97,6 +97,7 @@ class GlobalServer(object):
                 if res is not None:
                     results[r] = PerformanceMetric.from_bytes(res)
                     logging.info(f"Result of rank {r} collected = {results[r]}!!")
+                    self.storage.delete(f"validtask_rank_{r}_result")
             time.sleep(0.5)
         return results
 
@@ -114,8 +115,8 @@ class GlobalServer(object):
         tasks = split_ring(ring)
         logging.info(f"validating ring:{ring}, the corresponding tasks are {tasks}")
         for task in tasks:
-            self.dispatch_task(task, comm_addrs, group2global)
-            self.get_task_result(task, group2global)
+            self.dispatch_comm_task(task, comm_addrs, group2global)
+            self.collect_comm_task_results(task, group2global)
             logging.info("*" * 20 + "task completed!" + "*" * 20)
     
     def validate_computation(self):
@@ -141,6 +142,7 @@ class GlobalServer(object):
                 if res is not None:
                     results[r] = PerformanceMetric.from_bytes(res)
                     logging.info(f"Computation result of rank {r} collected = {results[r]}!!")
+                    self.storage.delete(f"validtask_rank_{r}_result")
             time.sleep(0.5)
 
 
@@ -165,10 +167,12 @@ class GlobalServer(object):
             if len(topo.rings[0]) == 1 or len(topo.trees[0]) == 1:
                 continue
             comm_addrs = {}
+            group2global = {}
             for cm in clique.comms:
                 comm_addrs[cm.group_rank] = cm.comm_addr
-            self.validate_ring(topo.rings[0], comm_addrs)
-            self.validate_tree(topo.trees[0], comm_addrs)
+                group2global[cm.group_rank] = cm.global_rank
+            self.validate_ring(topo.rings[0], comm_addrs, group2global)
+            self.validate_tree(topo.trees[0], comm_addrs, group2global)
         # Finally, clear the failed slow events and resume all jobs to monitoring state
         self.storage.ltrim("failslow_ranks", 1, 0)
         self.set_monitoring()
