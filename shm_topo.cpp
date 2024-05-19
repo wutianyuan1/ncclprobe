@@ -100,7 +100,7 @@ void Communicator::debug_print()
 
 NcclTopoConnection::NcclTopoConnection(int n_ranks)
 {
-    client.connect("127.0.0.1", 6379);
+    client.connect(get_master_addr(), get_redis_port());
 }
 
 NcclTopoConnection::~NcclTopoConnection()

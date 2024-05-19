@@ -102,12 +102,12 @@ def start_local_controller():
     parser = argparse.ArgumentParser("Local side controller of fail-slow detection")
     parser.add_argument("-m", "--master_addr", default="127.0.0.1", type=str)
     parser.add_argument("-p", "--master_port", default=6379, type=int)
-    parser.add_argument("-l", "--local_ip", default="127.0.0.1", type=str)
+    parser.add_argument("-l", "--local_id", default="127.0.0.1", type=str)
     parser.add_argument("-c", "--config_path", default="/workspace/ncclprobe/control_plane/config.json", type=str)
     parser.add_argument("-o", "--output_path", default="/workspace/ncclprobe/logs/", type=str)
     args = parser.parse_args()
     controller = LocalController(
-        args.master_addr, args.master_port, args.local_ip, args.config_path, args.output_path)
+        args.master_addr, args.master_port, args.local_id, args.config_path, args.output_path)
     controller.run()
 
 

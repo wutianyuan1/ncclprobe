@@ -55,3 +55,15 @@ inline const char* get_nccl_path(const char* nccl_path = nullptr)
 {
     return getenv(nccl_path ? nccl_path : "NCCL_PATH");
 }
+
+inline const char* get_master_addr()
+{
+    char* maddr = getenv("MASTER_ADDR");
+    return maddr ? maddr : "127.0.0.1"; 
+}
+
+inline int get_redis_port()
+{
+    char* rport = getenv("REDIS_PORT");
+    return rport ? std::atoi(rport) : 6379; 
+}

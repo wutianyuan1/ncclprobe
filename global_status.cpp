@@ -89,7 +89,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
     this->should_check = false;
     this->transparent = false;
     this->event_handler = std::shared_ptr<EventHandler>(
-        new EventHandler("127.0.0.1", 6379,
+        new EventHandler(get_master_addr(), get_redis_port(),
             reinterpret_cast<ncclSendFuncPtr>(get_function_ptr("ncclSend")),
             reinterpret_cast<ncclRecvFuncPtr>(get_function_ptr("ncclRecv")))
     );
@@ -131,8 +131,10 @@ void GlobalStatus::wait_installation_done() {
 int GlobalStatus::start_global_controller()
 {
     namespace bp = boost::process;
+    std::string cmdline = ("global_controller -m " + std::string(get_master_addr())\
+        + " -p " + std::to_string(get_redis_port()));
     std::vector<std::string> args {
-        "-c", "global_controller"
+        "-c", cmdline
     };
     global_controller_proc = std::shared_ptr<bp::child>(new bp::child(bp::search_path("sh"), args));
     BOOST_LOG_TRIVIAL(info) << "[Master rank] Global controller started";
@@ -142,8 +144,10 @@ int GlobalStatus::start_global_controller()
 int GlobalStatus::start_local_controller()
 {
     namespace bp = boost::process;
+    std::string cmdline = ("local_controller -m " + std::string(get_master_addr())\
+        + " -p " + std::to_string(get_redis_port()) + " -l " + std::to_string(get_rank(DistEngine::auto_find)));
     std::vector<std::string> args {
-        "-c", "local_controller"
+        "-c", cmdline
     };
     local_controller_proc = std::shared_ptr<bp::child>(new bp::child(bp::search_path("sh"), args));
     BOOST_LOG_TRIVIAL(info) << "[Local Master rank] Local controller started";
