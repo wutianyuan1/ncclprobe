@@ -67,3 +67,9 @@ inline int get_redis_port()
     char* rport = getenv("REDIS_PORT");
     return rport ? std::atoi(rport) : 6379; 
 }
+
+inline const char* get_whl_path()
+{
+    char* whl_path = getenv("CONTROL_PLANE_WHL_PATH");
+    return whl_path ? whl_path : "/workspace/ncclprobe/dist/control_plane-1.0-py3-none-any.whl";
+}

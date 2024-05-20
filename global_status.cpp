@@ -30,7 +30,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
 
     // Install the required controller packages for each node
     if (get_local_rank(DistEngine::auto_find) == 0)
-        install_python_packages("/workspace/ncclprobe/dist/control_plane-1.0-py3-none-any.whl");
+        install_python_packages(std::string(get_whl_path()));
     else
         wait_installation_done(); // other processes should wait the installation to complete
 

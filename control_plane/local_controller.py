@@ -10,12 +10,12 @@ PROFILE_PERIOD = 20
 
 
 class LocalController(object):
-    def __init__(self, redis_ip: str, redis_port: int, node_ip: str,
+    def __init__(self, redis_ip: str, redis_port: int, node_id: str,
                  config_path: str, log_path: str) -> None:
-        log_ip = node_ip.replace('.', '_')
+        log_ip = node_id.replace('.', '_')
         logging.basicConfig(filename=log_path + f'/local_controller_{log_ip}.log')
         logging.getLogger().setLevel(logging.INFO)
-        self.node_ip = node_ip
+        self.node_id = node_id
         self.config = local_analyzer.load_config(config_path)
         self.record_buffer = local_analyzer.NcclRecord(self.config)
         self.global_controller_client = redis.StrictRedis(host=redis_ip, port=redis_port, db=0)
@@ -40,7 +40,7 @@ class LocalController(object):
             self.global_controller_client.set("Perf_" + comm_addr, result_str)
 
     def run(self):
-        logging.critical(f"[Local controller] IP={self.node_ip} is launched!")
+        logging.critical(f"[Local controller] ID={self.node_id} is launched!")
         while True:
             time.sleep(5)
             try:

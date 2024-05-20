@@ -162,6 +162,10 @@ class GlobalServer(object):
         # (3) dispatch validation jobs and collect validation results
         self.pause_training()
         time.sleep(1)
+
+        # (3.1) check computation
+        self.validate_computation()
+        # (3.2) check communication
         for clique, topo in validate_topos:
             # Skip single-element ring/trees
             if len(topo.rings[0]) == 1 or len(topo.trees[0]) == 1:

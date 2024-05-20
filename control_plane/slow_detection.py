@@ -17,7 +17,7 @@ def remove_outliers(iter_durations, iter_start):
     })
     # Calculate the outlier boundary using z_score
     # Zscore = (data_point - mean) / std. deviation
-    threshold_z = 2.0
+    threshold_z = 3.0
     z = np.abs(stats.zscore(iter_durations['data']))
     outlier_indices = np.where(z > threshold_z)[0]
     iter_durations.drop(outlier_indices, inplace=True)
@@ -95,7 +95,7 @@ def find_performance_drop(call_id, call_time, period, start, thresh_prob=0.8, pl
         ts.append(call_time[i + period] - call_time[i])
         iter_start.append(call_time[i])
     ts, iter_start = remove_outliers(ts, iter_start)
-    result = rb.beast(ts, season='none', print_options=False, print_progress=False, quiet=True)
+    result = rb.beast(ts, season='none', print_options=False, print_progress=False, quiet=True, hasOutlier=True)
     # rb.print(result)
     num_change_points = int(result.trend.ncp_mode[0])
     change_point_pos = np.array(result.trend.cp[:num_change_points], dtype=np.int32)
