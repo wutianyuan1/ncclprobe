@@ -154,8 +154,10 @@ def detect_failslow(record: NcclRecord, plot=False):
         colors = ['powderblue', 'grey', 'pink', 'green']
 
     performance_drops = {}
+    last_event_ids = {}
     for (global_rank, per_gpu_record) in record_df.groupby("global_rank"):
         per_gpu_record.sort_values(by='event_id', inplace=True)
+        last_event_ids[global_rank] = per_gpu_record['event_id'].iloc[-1]
         call_time = per_gpu_record['call_time'].to_numpy()
         call_id = per_gpu_record['call_number'].to_numpy()
         start, period = find_period(call_id, nlags=50, significance_level=0.8)
@@ -171,7 +173,7 @@ def detect_failslow(record: NcclRecord, plot=False):
     if plot:
         plt.tight_layout()
         plt.savefig("figs/period.png")
-    return performance_drops
+    return last_event_ids, performance_drops
 
 
 def get_profile_results(record: NcclRecord):

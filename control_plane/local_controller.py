@@ -38,13 +38,39 @@ class LocalController(object):
             duration_std = np.std(comm_array[:, 1])
             result_str = f"{duration_min}_{duration_max}_{duration_avg}_{duration_std}"
             self.global_controller_client.set("Perf_" + comm_addr, result_str)
+    
+    def detect_failstop(self, prev_event_ids, cur_event_ids):
+        # First iteration, no fail-stops
+        if len(prev_event_ids) == 0:
+            return []
+        stopped_gpus = []
+        for rank in prev_event_ids:
+            if rank not in cur_event_ids:
+                stopped_gpus.append(rank)
+            else:
+                # the last event id doest not update between two rounds
+                # which implies this GPU does not work anymore...
+                if cur_event_ids[rank] == prev_event_ids[rank]:
+                    stopped_gpus.append(rank)
+        return stopped_gpus
 
     def run(self):
         logging.critical(f"[Local controller] ID={self.node_id} is launched!")
+        prev_event_ids = {}
         while True:
             time.sleep(5)
             try:
-                failslow_events = local_analyzer.detect_failslow(self.record_buffer, plot=False)
+                cur_event_ids, failslow_events = local_analyzer.detect_failslow(self.record_buffer, plot=False)
+                # Handle fail-stop
+                failstop_events = self.detect_failstop(prev_event_ids, cur_event_ids)
+                for stop_rank in failstop_events:
+                    logging.error(f"[Local controller] Rank{stop_rank} fail stop!!!")
+                    # push it to global controller
+                    if str(stop_rank) not in self.global_controller_client.lrange("failstop_ranks", 0, -1):
+                        self.global_controller_client.rpush("failstop_ranks", str(stop_rank))
+                prev_event_ids = cur_event_ids
+
+                # Handle fail-slow
                 if failslow_events is None:
                     logging.warning("No enough data is collected, please wait...")
                     continue

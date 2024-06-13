@@ -5,7 +5,7 @@ import redis
 import logging
 from typing import List, Dict
 from .global_topo import GlobalTopo
-from .task_split import split_ring
+from .task_split import split_ring, split_tree
 from .global_analyzer import GlobalAnalyzer, PerformanceMetric, CommunicatorClique
 from .communicator import Communicator, deserialize_communicator_from_redis
 
@@ -118,7 +118,18 @@ class GlobalServer(object):
             self.dispatch_comm_task(task, comm_addrs, group2global)
             self.collect_comm_task_results(task, group2global)
             logging.info("*" * 20 + "task completed!" + "*" * 20)
-    
+
+    def validate_tree(self, tree, comm_addrs, group2global):
+        tasks = split_tree(tree)
+        logging.info(f"validating tree:{tree}, the corresponding tasks are {tasks}")
+        for task in tasks:
+            # skip empty tasks
+            if len(task[0]) == 0:
+                continue
+            self.dispatch_comm_task(task, comm_addrs, group2global)
+            self.collect_comm_task_results(task, group2global)
+            logging.info("*" * 20 + "task completed!" + "*" * 20)
+
     def validate_computation(self):
         world_size = self.analyzer.world_size
         for i in range(world_size):
@@ -144,10 +155,6 @@ class GlobalServer(object):
                     logging.info(f"Computation result of rank {r} collected = {results[r]}!!")
                     self.storage.delete(f"validtask_rank_{r}_result")
             time.sleep(0.5)
-
-
-    def validate_tree(self, tree, comm_addrs, group2global):
-        return
 
     def handle_failslow(self, failslow_events):
         # Fisrt, we enables profile mode to enable CUDA events and collect kernel durations
