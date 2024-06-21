@@ -168,6 +168,7 @@ def detect_failslow(record: NcclRecord, plot=False):
                     "xlabel": "Execution Time / us", "ylabel": "Iteration Time / us"}
         else:
             pargs = None
+        logging.info(f"Rank {global_rank}: repeat pattern starts from {start}, period = {period}, pattern = {call_id[start: start + period]}")
         performance_drops[global_rank] = find_performance_drop(
             call_id, call_time, period, start, plot=plot, plot_args=pargs)
     if plot:
@@ -184,7 +185,7 @@ def get_profile_results(record: NcclRecord):
     for (global_rank, per_gpu_record) in record_df.groupby("global_rank"):
         per_gpu_record.sort_values(by='event_id', inplace=True)
         call_id = per_gpu_record['call_number'].to_numpy()
-        start, period = find_period(call_id, nlags=50, significance_level=0.8)
+        start, period = find_period(call_id, nlags=200, significance_level=0.8)
         print(global_rank, start, period)
 
         record_iter = False

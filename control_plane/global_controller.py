@@ -187,7 +187,27 @@ class GlobalServer(object):
         # Finally, clear the failed slow events and resume all jobs to monitoring state
         self.storage.ltrim("failslow_ranks", 1, 0)
         self.set_monitoring()
-    
+
+    def do_precheck_only_computation(self):
+        # only validate computation, this is because the deployment enviroment may not support comm. validation
+        self.pause_training()
+        self.validate_computation()
+        self.set_monitoring()
+
+    def handle_failslow_deployment(self, failslow_events):
+        # Fisrt, we enables profile mode to enable CUDA events and collect kernel durations
+        self.set_profiling()
+        # (1) wait and get profile results
+        perfs = self.analyzer.wait_and_build_performance_map()
+        logging.critical(f"Profiling metrics: {perfs}")
+        self.pause_training()
+        time.sleep(1)
+        self.validate_computation()
+        # Finally, clear the failed slow events and resume all jobs to monitoring state
+        self.storage.ltrim("failslow_ranks", 1, 0)
+        self.set_monitoring()
+
+
     def do_precheck(self):
         # In pre-check, we validate all rings/trees that NCCL built
         comms = self.get_communicators()
@@ -231,11 +251,12 @@ class GlobalServer(object):
                     # wait additional 5 seconds to ensure all comms are built.
                     time.sleep(5)
                     self.precheck = True
-                    self.do_precheck()
+                    self.do_precheck_only_computation()
+                    self.storage.set("precheck_done", '1')
                 failslow_events = self.check_failslow_events()
                 if len(failslow_events) != 0:
                     logging.info(f"[GlobalController] failslow events are reported from local: {failslow_events}")
-                    self.handle_failslow(failslow_events)
+                    self.handle_failslow_deployment(failslow_events)
         except KeyboardInterrupt:
             logging.critical("[GlobalController] Stop server running!")
             return

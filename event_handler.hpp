@@ -39,7 +39,8 @@ class EventHandler
     ncclComm_t world_comm;
     Communicator parsed_comm;
     std::shared_ptr<cpp_redis::client> client;
-    int* control_state;
+    // int* control_state;
+    ControlState control_state;
     ncclSendFuncPtr send_ptr;
     ncclRecvFuncPtr recv_ptr;
 public:

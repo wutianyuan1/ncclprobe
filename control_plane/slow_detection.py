@@ -95,6 +95,7 @@ def find_performance_drop(call_id, call_time, period, start, thresh_prob=0.8, pl
         ts.append(call_time[i + period] - call_time[i])
         iter_start.append(call_time[i])
     ts, iter_start = remove_outliers(ts, iter_start)
+    logging.critical(f"Estimated iteration time (moving average in buffer) = {np.mean(ts)}, std={np.std(ts)}")
     result = rb.beast(ts, season='none', print_options=False, print_progress=False, quiet=True, hasOutlier=True)
     # rb.print(result)
     num_change_points = int(result.trend.ncp_mode[0])
@@ -149,7 +150,6 @@ def find_period(seq, nlags=50, significance_level=0.7):
             if dist(seq[i: i + estimated_period],
                     seq[i + estimated_period: i + 2 * estimated_period]) == 0:
                 break
-        logging.info(f"Repeat pattern starts from {i}, period = {estimated_period}, pattern = {seq[i: i + estimated_period]}")
         return i, estimated_period
     else:
         warnings.warn("No peaks found in ACF, no patterns are found in NCCL logs")

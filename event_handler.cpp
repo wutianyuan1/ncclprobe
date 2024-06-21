@@ -120,12 +120,13 @@ EventHandler::EventHandler(std::string master_addr, int port, ncclSendFuncPtr sp
         client->set("world_size", world_size);
         client->sync_commit();
     }
-    cudaMalloc(&this->control_state, sizeof(int) * 4);
+    control_state = ControlState::STATE_MONITOR;
+    // cudaMalloc(&this->control_state, sizeof(int) * 4);
 }
 
 EventHandler::~EventHandler()
 {
-    cudaFree(this->control_state);
+    // cudaFree(this->control_state);
     client->disconnect();
 }
 
@@ -187,66 +188,112 @@ void EventHandler::fetech_and_exec_task()
 
 void EventHandler::handle_control_signal(cudaStream_t curr_stream, ControlState* state)
 {
-    if (parsed_comm.group_rank == 0)
+    // Each process checks the redis periodically.
+    client->get("control_state",
+        [&](const cpp_redis::reply& reply) {
+            if (!reply.is_string()) {
+                BOOST_LOG_TRIVIAL(error) << "Reply is not a string!";
+                return;
+            }
+            auto reply_str = reply.as_string();
+            if (reply_str[0] != 0)
+                control_state = ControlState(reply_str[0] - '0');
+        }
+    );
+    client->sync_commit();
+    // For deployment, we do not enable pause function now. 
+    // If we should validate, just simply perform a computation test and send the result back.
+    if (control_state == ControlState::STATE_VALIDATE)
     {
-        ControlState master_state = ControlState::STATE_MONITOR;
-        client->get("control_state",
+        std::string task_name = std::string("validtask_rank_") + std::to_string(get_rank(DistEngine::auto_find));
+        std::string task_content;
+
+        client->get(task_name,
             [&](const cpp_redis::reply& reply) {
-                if (!reply.is_string()) {
-                    BOOST_LOG_TRIVIAL(error) << "Reply is not a string!";
-                    return;
-                }
-                auto reply_str = reply.as_string();
-                if (reply_str[0] != 0)
-                    master_state = ControlState(reply_str[0] - '0');
+                if (reply.is_string())
+                    task_content = reply.as_string();
             }
         );
         client->sync_commit();
-        if (master_state != *state)  // broadcast if state changes
-            cudaMemcpy(control_state, &master_state, sizeof(int), cudaMemcpyHostToDevice);
-        ncclBroadcast(control_state, control_state, 1, ncclInt, 0, world_comm, curr_stream);
-    } 
-    else
-        ncclBroadcast(nullptr, control_state, 1, ncclInt, 0, world_comm, curr_stream);
-
-    ControlState sync_state = ControlState::STATE_MONITOR;
-    cudaMemcpy(&sync_state, control_state, sizeof(int), cudaMemcpyDeviceToHost);
-    *state = sync_state;
-
-    // If we should pause, then loop to wait the "continue" (pause=0) signal 
-    if (sync_state == ControlState::STATE_VALIDATE)
-    {
-        BOOST_LOG_TRIVIAL(info) << "Rank " << get_rank(DistEngine::auto_find) << " receives pause signal, paused!";
-        while (true)
+        // If a task is already acked by the worker, just skip it.
+        if (task_content != std::string(TASK_ACKED))
         {
-            // fetch a task from redis and execute it
-            fetech_and_exec_task();
-        
-            // check if we should continue
-            if (parsed_comm.group_rank == 0)
-            {
-                int my_pause = 1;
-                client->get("control_state",
-                    [&](const cpp_redis::reply& reply) {
-                        if (reply.is_string() && reply.as_string()[0] != '2') my_pause = 0;
-                    }
-                );
-                client->sync_commit();
-                if (my_pause == 0)
-                    cudaMemcpy(control_state, &my_pause, sizeof(int), cudaMemcpyHostToDevice);
-                ncclBroadcast(control_state, control_state, 1, ncclInt, 0, world_comm, curr_stream);
-            }
-            else
-                ncclBroadcast(nullptr, control_state, 1, ncclInt, 0, world_comm, curr_stream);
-
-            int do_validation = 0;
-            cudaMemcpy(&do_validation, control_state, sizeof(int), cudaMemcpyDeviceToHost);
-            if (!do_validation)
-            {
-                BOOST_LOG_TRIVIAL(info) << "Rank " << get_rank(DistEngine::auto_find) << " receives continue signal, will continue!";
-                break;   
-            }
-            usleep(500 * 1000);  // wait for 0.5 seconds
-        }
+            BOOST_LOG_TRIVIAL(info) << "Rank " << get_rank(DistEngine::auto_find) << " receives pause signal, paused!";
+            client->set(task_name, TASK_ACKED);
+            client->sync_commit();
+            auto result = perf_gemm(MATRIX_N);
+            // Add the result to redis
+            client->set(task_name + std::string("_result"), result.serialize());
+            client->sync_commit();
+            BOOST_LOG_TRIVIAL(info) << "Rank " << get_rank(DistEngine::auto_find) << " computation task done, will continue!";
+        }        
+        control_state = ControlState::STATE_MONITOR;
     }
+    *state = control_state;
 }
+
+// void EventHandler::handle_control_signal(cudaStream_t curr_stream, ControlState* state)
+// {
+//     if (parsed_comm.group_rank == 0)
+//     {
+//         ControlState master_state = ControlState::STATE_MONITOR;
+//         client->get("control_state",
+//             [&](const cpp_redis::reply& reply) {
+//                 if (!reply.is_string()) {
+//                     BOOST_LOG_TRIVIAL(error) << "Reply is not a string!";
+//                     return;
+//                 }
+//                 auto reply_str = reply.as_string();
+//                 if (reply_str[0] != 0)
+//                     master_state = ControlState(reply_str[0] - '0');
+//             }
+//         );
+//         client->sync_commit();
+//         if (master_state != *state)  // broadcast if state changes
+//             cudaMemcpy(control_state, &master_state, sizeof(int), cudaMemcpyHostToDevice);
+//         ncclBroadcast(control_state, control_state, 1, ncclInt, 0, world_comm, curr_stream);
+//     } 
+//     else
+//         ncclBroadcast(nullptr, control_state, 1, ncclInt, 0, world_comm, curr_stream);
+
+//     ControlState sync_state = ControlState::STATE_MONITOR;
+//     cudaMemcpy(&sync_state, control_state, sizeof(int), cudaMemcpyDeviceToHost);
+//     *state = sync_state;
+
+//     // If we should pause, then loop to wait the "continue" (pause=0) signal 
+//     if (sync_state == ControlState::STATE_VALIDATE)
+//     {
+//         BOOST_LOG_TRIVIAL(info) << "Rank " << get_rank(DistEngine::auto_find) << " receives pause signal, paused!";
+//         while (true)
+//         {
+//             // fetch a task from redis and execute it
+//             fetech_and_exec_task();
+        
+//             // check if we should continue
+//             if (parsed_comm.group_rank == 0)
+//             {
+//                 int my_pause = 1;
+//                 client->get("control_state",
+//                     [&](const cpp_redis::reply& reply) {
+//                         if (reply.is_string() && reply.as_string()[0] != '2') my_pause = 0;
+//                     }
+//                 );
+//                 client->sync_commit();
+//                 if (my_pause == 0)
+//                     cudaMemcpy(control_state, &my_pause, sizeof(int), cudaMemcpyHostToDevice);
+//                 ncclBroadcast(control_state, control_state, 1, ncclInt, 0, world_comm, curr_stream);
+//             }
+//             else
+//                 ncclBroadcast(nullptr, control_state, 1, ncclInt, 0, world_comm, curr_stream);
+
+//             int do_validation = 0;
+//             cudaMemcpy(&do_validation, control_state, sizeof(int), cudaMemcpyDeviceToHost);
+//             if (!do_validation)
+//             {
+//                 BOOST_LOG_TRIVIAL(info) << "Rank " << get_rank(DistEngine::auto_find) << " receives continue signal, will continue!";
+//                 break;   
+//             }
+//             usleep(500 * 1000);  // wait for 0.5 seconds
+//         }
+//     }
+// }

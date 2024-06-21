@@ -86,7 +86,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
     this->accumulated_duration = 0.0;
 
     // Initialize interaction compoent
-    this->should_check = false;
+    this->last_check_time = 0.0;
     this->transparent = false;
     this->event_handler = std::shared_ptr<EventHandler>(
         new EventHandler(get_master_addr(), get_redis_port(),

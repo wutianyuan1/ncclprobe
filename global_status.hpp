@@ -59,7 +59,7 @@ struct GlobalStatus {
 
     // To implement worker-side response to controllers
     std::shared_ptr<EventHandler> event_handler;
-    bool should_check;
+    double last_check_time;
     bool transparent;
 
     // global controller & local controllers

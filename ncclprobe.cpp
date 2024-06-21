@@ -16,6 +16,7 @@
 #include "utils.hpp"
 
 #define CHECK_PAUSE_MAGIC 503
+#define CHECK_STATUS_PERIOD 3.0
 #define RECORD_TOO_SMALL(count) ((count) < MIN_RECORD_OP_SIZE)
 
 #define RETRIEVE_NCCL_FUNC(func_name)\
@@ -73,8 +74,8 @@ ncclResult_t log_event(const void* buff1, const void* buff2, size_t count,
     char pcistr[PCI_STR_LEN] = {0};
     auto call_time = 0.0, call_duration = 0.0;
 
-    if (datatype == ncclInt8 && count == CHECK_PAUSE_MAGIC)
-        g_status.should_check = true;
+    // if (datatype == ncclInt8 && count == CHECK_PAUSE_MAGIC)
+    //     g_status.should_check = true;
 
     // skip operations with very small size (<1K)
     if (RECORD_TOO_SMALL(count))
@@ -339,11 +340,11 @@ ncclResult_t ncclGroupEnd()
 
 
     // Check whether to change state / do validation
-    if (g_status.should_check) {
+    if (g_status.time_since_initialize() - g_status.last_check_time > CHECK_STATUS_PERIOD * 1000 * 1000) {
         g_status.transparent = true;
         g_status.event_handler->handle_control_signal(g_status.curr_stream, &g_status.state);
         g_status.transparent = false;
-        g_status.should_check = false;
+        g_status.last_check_time = g_status.time_since_initialize();
     }
     
     if (g_status.comm_in_group != nullptr)
