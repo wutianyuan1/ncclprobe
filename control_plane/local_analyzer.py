@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from .slow_detection import find_period, find_performance_drop
+from .visualizer import ValueLogger
 from multiprocessing import shared_memory, resource_tracker
 
 OPS = ['Send', 'Recv', 'Bcast', 'Broadcast', 'AllGather', 'ReduceScatter', 'AllReduce']
@@ -155,6 +156,7 @@ def detect_failslow(record: NcclRecord, plot=False):
 
     performance_drops = {}
     last_event_ids = {}
+    estimated_iter_time = {}
     for (global_rank, per_gpu_record) in record_df.groupby("global_rank"):
         per_gpu_record.sort_values(by='event_id', inplace=True)
         last_event_ids[global_rank] = per_gpu_record['event_id'].iloc[-1]
@@ -168,8 +170,12 @@ def detect_failslow(record: NcclRecord, plot=False):
                     "xlabel": "Execution Time / us", "ylabel": "Iteration Time / us"}
         else:
             pargs = None
-        performance_drops[global_rank] = find_performance_drop(
+        performance_drops[global_rank], estimated_iter_time['rank' + str(global_rank)] = find_performance_drop(
             call_id, call_time, period, start, plot=plot, plot_args=pargs)
+
+    logger = ValueLogger()
+    logger.push_val("EstimatedIterationTime", 'rank', estimated_iter_time)
+
     if plot:
         plt.tight_layout()
         plt.savefig("figs/period.png")

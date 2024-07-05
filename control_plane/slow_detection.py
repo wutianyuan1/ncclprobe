@@ -95,6 +95,7 @@ def find_performance_drop(call_id, call_time, period, start, thresh_prob=0.8, pl
         ts.append(call_time[i + period] - call_time[i])
         iter_start.append(call_time[i])
     ts, iter_start = remove_outliers(ts, iter_start)
+    last_10_avg_ts = np.mean(ts[-10:])
     result = rb.beast(ts, season='none', print_options=False, print_progress=False, quiet=True, hasOutlier=True)
     # rb.print(result)
     num_change_points = int(result.trend.ncp_mode[0])
@@ -129,10 +130,10 @@ def find_performance_drop(call_id, call_time, period, start, thresh_prob=0.8, pl
         for cpt in real_change_point_df['values']:
             ax.plot([cpt, cpt], [0, ymax], c='red', label='Validated Change Point')
     real_change_point_df.reset_index(drop=True, inplace=True)
-    return real_change_point_df
+    return real_change_point_df, last_10_avg_ts
 
 
-def find_period(seq, nlags=50, significance_level=0.7):
+def find_period(seq, nlags=200, significance_level=0.7):
     def dist(seq1, seq2):
         # Count the number of different elements in two sequence
         # We assume the NCCL call pattern is *exactly the same*
