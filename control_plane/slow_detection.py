@@ -133,7 +133,7 @@ def find_performance_drop(call_id, call_time, period, start, thresh_prob=0.8, pl
     return real_change_point_df
 
 
-def find_period(seq, nlags=50, significance_level=0.7):
+def find_period(seq, nlags=200, significance_level=0.7):
     def dist(seq1, seq2):
         # Count the number of different elements in two sequence
         # We assume the NCCL call pattern is *exactly the same*

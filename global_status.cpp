@@ -27,7 +27,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
     (
         boost::log::trivial::severity >= boost::log::trivial::info
     );
-    boost::log::add_file_log(std::string(get_probe_log_path()) + "./ncclprobe.log"); // Set the log file path here
+    boost::log::add_file_log(std::string(get_probe_log_path()) + "/./ncclprobe.log"); // Set the log file path here
 
     // Install the required controller packages for each node
     if (get_local_rank(DistEngine::auto_find) == 0)
