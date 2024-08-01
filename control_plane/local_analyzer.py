@@ -173,8 +173,8 @@ def detect_failslow(record: NcclRecord, plot=False):
         performance_drops[global_rank], estimated_iter_time['rank' + str(global_rank)] = find_performance_drop(
             call_id, call_time, period, start, plot=plot, plot_args=pargs)
 
-    logger = ValueLogger()
-    logger.push_val("EstimatedIterationTime", 'rank', estimated_iter_time)
+    # logger = ValueLogger()
+    # logger.push_val("EstimatedIterationTime", 'rank', estimated_iter_time)
 
     if plot:
         plt.tight_layout()
