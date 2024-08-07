@@ -153,6 +153,9 @@ class GlobalAnalyzer(object):
                 break
             else:
                 break
+
+        perf_keys = self.storage.scan_iter("Perf_*")
+        self.storage.delete(*perf_keys)
         return comm_perfs
 
     def find_slow_clique(self, perfs: Dict[int, PerformanceMetric],

@@ -27,7 +27,7 @@ void GlobalStatus::initialize(const char* nccl_path_)
     (
         boost::log::trivial::severity >= boost::log::trivial::info
     );
-    boost::log::add_file_log(std::string(get_probe_log_path()) + "/ncclprobe.log"); // Set the log file path here
+    boost::log::add_file_log(std::string(get_probe_log_path()) + "/./ncclprobe.log"); // Set the log file path here
 
     // Install the required controller packages for each node
     if (get_local_rank(DistEngine::auto_find) == 0)
@@ -133,9 +133,7 @@ int GlobalStatus::start_global_controller()
 {
     namespace bp = boost::process;
     std::string cmdline = ("global_controller -m " + std::string(get_master_addr())\
-        + " -p " + std::to_string(get_redis_port())
-        + " -o " + std::string(get_global_controller_log_path()));
-    std::cout << "$$$$$ " << cmdline << std::endl;
+        + " -p " + std::to_string(get_redis_port()) + " -o " + std::string(get_global_controller_log_path()));
     std::vector<std::string> args {
         "-c", cmdline
     };
@@ -148,9 +146,7 @@ int GlobalStatus::start_local_controller()
 {
     namespace bp = boost::process;
     std::string cmdline = ("local_controller -m " + std::string(get_master_addr())\
-        + " -p " + std::to_string(get_redis_port()) + " -l " + std::to_string(get_rank(DistEngine::auto_find))
-        + " -o " + std::string(get_local_controller_log_path()));
-    std::cout << "$$$$$ " << cmdline << std::endl;
+        + " -p " + std::to_string(get_redis_port()) + " -l " + std::to_string(get_rank(DistEngine::auto_find)) + " -o " + std::string(get_local_controller_log_path()));
     std::vector<std::string> args {
         "-c", cmdline
     };

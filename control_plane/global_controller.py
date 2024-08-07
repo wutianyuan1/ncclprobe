@@ -232,6 +232,7 @@ class GlobalServer(object):
                     time.sleep(5)
                     self.precheck = True
                     self.do_precheck()
+                    self.storage.set("precheck_done", '1')
                 failslow_events = self.check_failslow_events()
                 if len(failslow_events) != 0:
                     logging.info(f"[GlobalController] failslow events are reported from local: {failslow_events}")
