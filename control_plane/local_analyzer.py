@@ -180,7 +180,7 @@ def detect_failslow(record: NcclRecord, plot=False):
     if plot:
         plt.tight_layout()
         plt.savefig("figs/period.png")
-    return last_event_ids, performance_drops
+    return last_event_ids, performance_drops, estimated_iter_time
 
 
 def get_profile_results(record: NcclRecord):

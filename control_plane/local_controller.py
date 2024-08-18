@@ -70,7 +70,8 @@ class LocalController(object):
         while True:
             time.sleep(5)
             try:
-                cur_event_ids, failslow_events = local_analyzer.detect_failslow(self.record_buffer, plot=False)
+                cur_event_ids, failslow_events, estimated_iter_time =\
+                    local_analyzer.detect_failslow(self.record_buffer, plot=False)
                 # Handle fail-stop
                 failstop_events = self.detect_failstop(prev_event_ids, cur_event_ids)
                 for stop_rank in failstop_events:
@@ -92,6 +93,17 @@ class LocalController(object):
                             f"Failslow happens at rank={global_rank}, detail={failslow_df}")
                         self.report_failslow(global_rank, failslow_df)
                         time.sleep(0.5)
+
+                vals = [float(i) for i in estimated_iter_time.values()]
+                minval = min(vals)
+                cur_min_str = self.global_controller_client.get("min_iter_time")
+                if cur_min_str is not None:
+                    cur_min = float(cur_min_str.decode())
+                else:
+                    cur_min = float("inf")
+                self.global_controller_client.set("cur_iter_time", minval/1000)
+                if minval < cur_min:
+                    self.global_controller_client.set("min_iter_time", minval/1000)
 
                 curr_state = self.global_controller_client.get("control_state").decode()
                 # If other local controller reports fail-slow, we should also collect our profile results

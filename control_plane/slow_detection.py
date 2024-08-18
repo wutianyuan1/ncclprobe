@@ -95,7 +95,7 @@ def find_performance_drop(call_id, call_time, period, start, thresh_prob=0.8, pl
         ts.append(call_time[i + period] - call_time[i])
         iter_start.append(call_time[i])
     ts, iter_start = remove_outliers(ts, iter_start)
-    last_10_avg_ts = np.mean(ts[-10:])
+    last_10_avg_ts = np.mean(ts[-2:])
     result = rb.beast(ts, season='none', print_options=False, print_progress=False, quiet=True, hasOutlier=True)
     # rb.print(result)
     num_change_points = int(result.trend.ncp_mode[0])
