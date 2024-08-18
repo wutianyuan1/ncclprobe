@@ -1,15 +1,17 @@
 import redis
 import numpy as np
 import cvxpy as cp
+import logging
 from typing import Dict
 from .global_analyzer import PerformanceMetric
 
 
 def get_time_array(redis_client: redis.StrictRedis, compute_time: Dict[int, PerformanceMetric], threshold: float = 1.1):
     # normal iteration time
-    min_iter_time = int(redis_client.get('min_iter_time').decode())
+    min_iter_time = float(redis_client.get('min_iter_time').decode())
     # iteration time after fail-slow
-    slow_iter_time = int(redis_client.get("cur_iter_time").decode())
+    slow_iter_time = float(redis_client.get("cur_iter_time").decode())
+    logging.info(f"Min iter time: {min_iter_time}, slow time: {slow_iter_time}, compute_time: {compute_time}")
     # find the stats of compute validation
     time_array = np.zeros(len(compute_time), dtype=np.float32)
     vals = [i.avg_lat for i in compute_time.values()]
@@ -29,7 +31,7 @@ def get_time_array(redis_client: redis.StrictRedis, compute_time: Dict[int, Perf
     return time_array
 
 
-def solve(time_array: np.ndarray, micro_bsz: int, global_bsz: int):
+def solve_dp(time_array: np.ndarray, micro_bsz: int, global_bsz: int):
     num_dp_groups = len(time_array)
     num_microbatches = cp.Variable(shape=num_dp_groups, integer=True)
     N_t = cp.multiply(num_microbatches, time_array)
@@ -51,15 +53,9 @@ if __name__ == '__main__':
     client = redis.StrictRedis(redis_host, redis_port, db=0)
     compute_time = {
         0: PerformanceMetric(65, 65, 65, 0.01),
-        1: PerformanceMetric(65, 65, 65, 0.01),
-        2: PerformanceMetric(65, 80, 75, 5.01),
-        3: PerformanceMetric(65, 65, 65, 0.01),
-        4: PerformanceMetric(65, 65, 65, 0.01),
-        5: PerformanceMetric(65, 200, 150, 50.01),
-        6: PerformanceMetric(65, 65, 65, 0.01),
-        7: PerformanceMetric(65, 65, 65, 0.01)
+        1: PerformanceMetric(515, 515, 515, 50.01),
     }
     time_array = get_time_array(client, compute_time)
     print(time_array)
-    ret = solve(time_array, 2, 256)
+    ret = solve_dp(time_array, 2, 256)
     print(ret)

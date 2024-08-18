@@ -14,6 +14,8 @@
 #include <boost/log/core.hpp>
 #include <boost/log/expressions.hpp>
 #include <boost/process.hpp>
+#include <boost/log/utility/setup/common_attributes.hpp>
+#include <boost/log/utility/setup/file.hpp>
 #include "config.hpp"
 #include "shm_storage.hpp"
 #include "shm_topo.hpp"

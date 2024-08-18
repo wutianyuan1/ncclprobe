@@ -56,11 +56,22 @@ class LocalController(object):
 
     def run(self):
         logging.critical(f"[Local controller] ID={self.node_id} is launched!")
+        # First, wait for pre-check tp finish
+        ret = self.global_controller_client.get("precheck_done")
+        while (ret is None) or (ret.decode() != '1'):
+            ret = self.global_controller_client.get("precheck_done")
+            logging.critical("Waiting for pre-check done!")
+            time.sleep(5)
+        self.record_buffer.clear()
+        self.reported_failslow_points = set()
+
+        # Then, start the monitoring loop
         prev_event_ids = {}
         while True:
             time.sleep(5)
             try:
-                cur_event_ids, failslow_events = local_analyzer.detect_failslow(self.record_buffer, plot=False)
+                cur_event_ids, failslow_events, estimated_iter_time =\
+                    local_analyzer.detect_failslow(self.record_buffer, plot=False)
                 # Handle fail-stop
                 failstop_events = self.detect_failstop(prev_event_ids, cur_event_ids)
                 for stop_rank in failstop_events:
@@ -81,6 +92,18 @@ class LocalController(object):
                         logging.critical(
                             f"Failslow happens at rank={global_rank}, detail={failslow_df}")
                         self.report_failslow(global_rank, failslow_df)
+                        time.sleep(0.5)
+
+                vals = [float(i) for i in estimated_iter_time.values()]
+                minval = min(vals)
+                cur_min_str = self.global_controller_client.get("min_iter_time")
+                if cur_min_str is not None:
+                    cur_min = float(cur_min_str.decode())
+                else:
+                    cur_min = float("inf")
+                self.global_controller_client.set("cur_iter_time", minval/1000)
+                if minval < cur_min:
+                    self.global_controller_client.set("min_iter_time", minval/1000)
 
                 curr_state = self.global_controller_client.get("control_state").decode()
                 # If other local controller reports fail-slow, we should also collect our profile results
@@ -93,6 +116,7 @@ class LocalController(object):
                 # local side should wait it to collect some profile data and report it to global.
                 # Finally, we should wait until the global controller finishes its validation.
                 if failed_slow or is_profiling:
+                    logging.critical("[Local Controller] In profiling mode, waiting for profiling results...")
                     time.sleep(PROFILE_PERIOD)
                     profiling_res = local_analyzer.get_profile_results(self.record_buffer)
                     self.report_profiling_result(profiling_res)

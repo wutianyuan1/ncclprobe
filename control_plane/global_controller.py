@@ -8,6 +8,7 @@ from .global_topo import GlobalTopo
 from .task_split import split_ring, split_tree
 from .global_analyzer import GlobalAnalyzer, PerformanceMetric, CommunicatorClique
 from .communicator import Communicator, deserialize_communicator_from_redis
+from .dp_planner import get_time_array, solve_dp
 
 
 class ControlState:
@@ -34,6 +35,7 @@ class GlobalServer(object):
         self.storage = redis.StrictRedis(host=master_addr, port=port, db=0)
         self.analyzer = GlobalAnalyzer(self.storage)
         self.precheck = False
+        self.dp_version = 0
         self.set_monitoring()
 
     def __del__(self):
@@ -62,6 +64,34 @@ class GlobalServer(object):
     
     def set_monitoring(self):
         self.storage.set("control_state", str(ControlState.STATE_MONITOR))
+
+    def group_comp_time_by_dp(self, all_cliques: Dict[int, CommunicatorClique], comp_results: Dict[int, PerformanceMetric]):
+        # 1st pass: Synchronize all results within the same PP group
+        for c in all_cliques.values():
+            if c.is_pp:
+                ts = [comp_results[i].avg_lat for i in c.ranks]
+                max_ts = max(ts)
+                for r in c.ranks:
+                    comp_results[r] = PerformanceMetric(
+                        max_ts, max_ts, max_ts, 0
+                    )
+        # 2nd pass: Synchronize all results within the same TP group
+        for c in all_cliques.values():
+            if c.is_tp:
+                ts = [comp_results[i].avg_lat for i in c.ranks]
+                max_ts = max(ts)
+                for r in c.ranks:
+                    comp_results[r] = PerformanceMetric(
+                        max_ts, max_ts, max_ts, 0
+                    )
+        # 3rd pass: aggregate to DP group
+        dp_results = {}
+        for c in all_cliques.values():
+            if c.is_dp:
+                for (dpr, r) in enumerate(c.ranks):
+                    dp_results[dpr] = comp_results[r]
+        logging.info(f"DP computation results: {dp_results}")
+        return dp_results
     
     def dispatch_comm_task(self, task, comm_addrs, group2global):
         senders, recvers = task
@@ -155,6 +185,7 @@ class GlobalServer(object):
                     logging.info(f"Computation result of rank {r} collected = {results[r]}!!")
                     self.storage.delete(f"validtask_rank_{r}_result")
             time.sleep(0.5)
+        return results
 
     def handle_failslow(self, failslow_events):
         # Fisrt, we enables profile mode to enable CUDA events and collect kernel durations
@@ -171,7 +202,23 @@ class GlobalServer(object):
         time.sleep(1)
 
         # (3.1) check computation
-        self.validate_computation()
+        comp_results = self.validate_computation()
+        comp_results = self.group_comp_time_by_dp(cliques, comp_results)
+        time_array = get_time_array(self.storage, comp_results)
+        # Mitigation by adjusting batch size distribution across DP groups
+        micro_bsz = self.storage.get("micro_batch_size")
+        global_bsz = self.storage.get("global_batch_size")
+        if micro_bsz is not None and global_bsz is not None:
+            micro_bsz = int(micro_bsz.decode())
+            global_bsz = int(global_bsz.decode())
+            new_dp = solve_dp(time_array, micro_bsz, global_bsz)
+            # microbatch changed
+            self.dp_version += 1
+            self.storage.set('batch_distribution', str(new_dp))
+            self.storage.set("dp_version", self.dp_version)
+        else:
+            logging.warning(f"batch size not found: microbsz={micro_bsz}, globalbsz={global_bsz}")
+
         # (3.2) check communication
         for clique, topo in validate_topos:
             # Skip single-element ring/trees
@@ -206,7 +253,8 @@ class GlobalServer(object):
         time.sleep(1)
 
         # First, check computation performance
-        self.validate_computation()
+        comp_results = self.validate_computation()
+        comp_results = self.group_comp_time_by_dp(all_cliques, comp_results)
 
         for clique, topo in validate_topos:
             # Skip single-element ring/trees
@@ -232,6 +280,7 @@ class GlobalServer(object):
                     time.sleep(5)
                     self.precheck = True
                     self.do_precheck()
+                    self.storage.set("precheck_done", '1')
                 failslow_events = self.check_failslow_events()
                 if len(failslow_events) != 0:
                     logging.info(f"[GlobalController] failslow events are reported from local: {failslow_events}")

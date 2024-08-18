@@ -73,3 +73,21 @@ inline const char* get_whl_path()
     char* whl_path = getenv("CONTROL_PLANE_WHL_PATH");
     return whl_path ? whl_path : "/workspace/ncclprobe/dist/control_plane-1.0-py3-none-any.whl";
 }
+
+inline const char* get_local_controller_log_path()
+{
+    char* whl_path = getenv("LOCAL_CONTROLLER_LOG_PATH");
+    return whl_path;
+}
+
+inline const char* get_global_controller_log_path()
+{
+    char* whl_path = getenv("GLOBAL_CONTROLLER_LOG_PATH");
+    return whl_path;
+}
+
+inline const char* get_probe_log_path()
+{
+    char* whl_path = getenv("NCCLPROBE_LOG_PATH");
+    return whl_path;
+}
