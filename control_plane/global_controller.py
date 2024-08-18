@@ -205,14 +205,19 @@ class GlobalServer(object):
         comp_results = self.validate_computation()
         comp_results = self.group_comp_time_by_dp(cliques, comp_results)
         time_array = get_time_array(self.storage, comp_results)
-        #### TODO: get them from redis
-        micro_bsz = 4
-        globa_bsz = 32
-        new_dp = solve_dp(time_array, micro_bsz, globa_bsz)
-        # microbatch changed
-        self.dp_version += 1
-        self.storage.set('batch_distribution', str(new_dp))
-        self.storage.set("dp_version", self.dp_version)
+        # Mitigation by adjusting batch size distribution across DP groups
+        micro_bsz = self.storage.get("micro_batch_size")
+        global_bsz = self.storage.get("global_batch_size")
+        if micro_bsz is not None and global_bsz is not None:
+            micro_bsz = int(micro_bsz.decode())
+            global_bsz = int(global_bsz.decode())
+            new_dp = solve_dp(time_array, micro_bsz, global_bsz)
+            # microbatch changed
+            self.dp_version += 1
+            self.storage.set('batch_distribution', str(new_dp))
+            self.storage.set("dp_version", self.dp_version)
+        else:
+            logging.warning(f"batch size not found: microbsz={micro_bsz}, globalbsz={global_bsz}")
 
         # (3.2) check communication
         for clique, topo in validate_topos:
