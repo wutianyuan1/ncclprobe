@@ -8,7 +8,7 @@ from .global_topo import GlobalTopo
 from .task_split import split_ring, split_tree
 from .global_analyzer import GlobalAnalyzer, PerformanceMetric, CommunicatorClique
 from .communicator import Communicator, deserialize_communicator_from_redis
-from .dp_planner import get_time_array, solve_dp
+from .mitigation_plan import MitigationPlan
 
 
 class ControlState:
@@ -21,6 +21,10 @@ class ProcessRole:
     ROLE_SENDER = 0
     ROLE_RECVER = 1
     ROLE_ACKED  = 10086
+
+
+DP_CHECK_INTERVAL = 20
+
 
 class GlobalServer(object):
     def __init__(self, log_path, master_addr, port) -> None:
@@ -35,7 +39,7 @@ class GlobalServer(object):
         self.storage = redis.StrictRedis(host=master_addr, port=port, db=0)
         self.analyzer = GlobalAnalyzer(self.storage)
         self.precheck = False
-        self.dp_version = 0
+        self.handler = MitigationPlan(self.storage)
         self.set_monitoring()
 
     def __del__(self):
@@ -64,34 +68,6 @@ class GlobalServer(object):
     
     def set_monitoring(self):
         self.storage.set("control_state", str(ControlState.STATE_MONITOR))
-
-    def group_comp_time_by_dp(self, all_cliques: Dict[int, CommunicatorClique], comp_results: Dict[int, PerformanceMetric]):
-        # 1st pass: Synchronize all results within the same PP group
-        for c in all_cliques.values():
-            if c.is_pp:
-                ts = [comp_results[i].avg_lat for i in c.ranks]
-                max_ts = max(ts)
-                for r in c.ranks:
-                    comp_results[r] = PerformanceMetric(
-                        max_ts, max_ts, max_ts, 0
-                    )
-        # 2nd pass: Synchronize all results within the same TP group
-        for c in all_cliques.values():
-            if c.is_tp:
-                ts = [comp_results[i].avg_lat for i in c.ranks]
-                max_ts = max(ts)
-                for r in c.ranks:
-                    comp_results[r] = PerformanceMetric(
-                        max_ts, max_ts, max_ts, 0
-                    )
-        # 3rd pass: aggregate to DP group
-        dp_results = {}
-        for c in all_cliques.values():
-            if c.is_dp:
-                for (dpr, r) in enumerate(c.ranks):
-                    dp_results[dpr] = comp_results[r]
-        logging.info(f"DP computation results: {dp_results}")
-        return dp_results
     
     def dispatch_comm_task(self, task, comm_addrs, group2global):
         senders, recvers = task
@@ -144,21 +120,27 @@ class GlobalServer(object):
     def validate_ring(self, ring, comm_addrs, group2global):
         tasks = split_ring(ring)
         logging.info(f"validating ring:{ring}, the corresponding tasks are {tasks}")
+        all_results = []
         for task in tasks:
             self.dispatch_comm_task(task, comm_addrs, group2global)
-            self.collect_comm_task_results(task, group2global)
+            task_result = self.collect_comm_task_results(task, group2global)
             logging.info("*" * 20 + "task completed!" + "*" * 20)
+            all_results.append(task_result)
+        return tasks, all_results
 
     def validate_tree(self, tree, comm_addrs, group2global):
         tasks = split_tree(tree)
         logging.info(f"validating tree:{tree}, the corresponding tasks are {tasks}")
+        all_results = []
         for task in tasks:
             # skip empty tasks
             if len(task[0]) == 0:
                 continue
             self.dispatch_comm_task(task, comm_addrs, group2global)
-            self.collect_comm_task_results(task, group2global)
+            task_result = self.collect_comm_task_results(task, group2global)
             logging.info("*" * 20 + "task completed!" + "*" * 20)
+            all_results.append(task_result)
+        return tasks, all_results
 
     def validate_computation(self):
         world_size = self.analyzer.world_size
@@ -203,23 +185,9 @@ class GlobalServer(object):
 
         # (3.1) check computation
         comp_results = self.validate_computation()
-        comp_results = self.group_comp_time_by_dp(cliques, comp_results)
-        time_array = get_time_array(self.storage, comp_results)
-        # Mitigation by adjusting batch size distribution across DP groups
-        micro_bsz = self.storage.get("micro_batch_size")
-        global_bsz = self.storage.get("global_batch_size")
-        if micro_bsz is not None and global_bsz is not None:
-            micro_bsz = int(micro_bsz.decode())
-            global_bsz = int(global_bsz.decode())
-            new_dp = solve_dp(time_array, micro_bsz, global_bsz)
-            # microbatch changed
-            self.dp_version += 1
-            self.storage.set('batch_distribution', str(new_dp))
-            self.storage.set("dp_version", self.dp_version)
-        else:
-            logging.warning(f"batch size not found: microbsz={micro_bsz}, globalbsz={global_bsz}")
 
         # (3.2) check communication
+        all_tasks, all_results = [], []
         for clique, topo in validate_topos:
             # Skip single-element ring/trees
             if len(topo.rings[0]) == 1 or len(topo.trees[0]) == 1:
@@ -229,11 +197,20 @@ class GlobalServer(object):
             for cm in clique.comms:
                 comm_addrs[cm.group_rank] = cm.comm_addr
                 group2global[cm.group_rank] = cm.global_rank
-            self.validate_ring(topo.rings[0], comm_addrs, group2global)
-            self.validate_tree(topo.trees[0], comm_addrs, group2global)
-        # Finally, clear the failed slow events and resume all jobs to monitoring state
+            tasks, results = self.validate_ring(topo.rings[0], comm_addrs, group2global)
+            all_tasks += tasks
+            all_results += results
+            tasks, results = self.validate_tree(topo.trees[0], comm_addrs, group2global)
+            all_tasks += tasks
+            all_results += results
+        # Then, clear the failed slow events and resume all jobs to monitoring state
         self.storage.ltrim("failslow_ranks", 1, 0)
         self.set_monitoring()
+
+        # Finally, invoke mitigation planner to handle this event
+        self.handler.mitigate_failslow(
+            DP_CHECK_INTERVAL, comp_results, cliques, all_tasks, all_results
+        )
     
     def do_precheck(self):
         # In pre-check, we validate all rings/trees that NCCL built
@@ -254,7 +231,6 @@ class GlobalServer(object):
 
         # First, check computation performance
         comp_results = self.validate_computation()
-        comp_results = self.group_comp_time_by_dp(all_cliques, comp_results)
 
         for clique, topo in validate_topos:
             # Skip single-element ring/trees

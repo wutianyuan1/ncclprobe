@@ -44,6 +44,7 @@ def solve_dp(time_array: np.ndarray, micro_bsz: int, global_bsz: int):
     problem = cp.Problem(cp.Minimize(variance), constraints)
     problem.solve(solver=cp.ECOS_BB)
     num_microbatches = [round(i) for i in num_microbatches.value]
+    logging.info(f"[DP solver] new DP plan is {num_microbatches}")
     return num_microbatches
 
 
