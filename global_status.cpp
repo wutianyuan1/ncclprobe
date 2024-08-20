@@ -138,6 +138,18 @@ int GlobalStatus::start_global_controller()
         "-c", cmdline
     };
     global_controller_proc = std::shared_ptr<bp::child>(new bp::child(bp::search_path("sh"), args));
+    // Wait for Redis service ready
+    while (true) {
+        try {
+            cpp_redis::client client;
+            client.connect(get_master_addr(), get_redis_port());
+            break;
+        }
+        catch (const std::exception& e){
+            std::cout << "Waiting for redis ready: " << e.what() << std::endl;
+            sleep(1);
+        }
+    }
     BOOST_LOG_TRIVIAL(info) << "[Master rank] Global controller started";
     return 0;
 }

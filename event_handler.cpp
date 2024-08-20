@@ -113,7 +113,17 @@ EventHandler::EventHandler(std::string master_addr, int port, ncclSendFuncPtr sp
     send_ptr = sptr;
     recv_ptr = rptr;
     client = std::shared_ptr<cpp_redis::client>(new cpp_redis::client());
-    client->connect(master_addr, port);
+    while (true) {
+        try {
+            client->connect(master_addr, port);
+            break;
+        }
+        catch (std::exception& e) {
+            std::cout << "Eventhandler:" << e.what() << std::endl;
+            sleep(1);
+        }
+    }
+
     if (get_rank(DistEngine::auto_find) == 0)
     {
         std::string world_size = std::to_string(get_world_size(DistEngine::auto_find));

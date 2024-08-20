@@ -100,7 +100,16 @@ void Communicator::debug_print()
 
 NcclTopoConnection::NcclTopoConnection(int n_ranks)
 {
-    client.connect(get_master_addr(), get_redis_port());
+    while (true) {
+        try {
+            client.connect(get_master_addr(), get_redis_port());
+            break;
+        }
+        catch (std::exception& e) {
+            std::cout << "NcclTopoConnection: " << e.what() << std::endl;
+            sleep(1);
+        }
+    }
 }
 
 NcclTopoConnection::~NcclTopoConnection()

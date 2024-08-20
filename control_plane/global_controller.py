@@ -109,8 +109,7 @@ class GlobalServer(object):
 
     def start_redis_server(self):
         try:
-            redis_prog = subprocess.Popen(["redis-server", "--bind", self.master_addr, "--save", "\"\"", "--appendonly", "no"],
-                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            redis_prog = subprocess.Popen(["redis-server", "--bind", self.master_addr, "--save", "\"\"", "--appendonly", "no"])
         except FileNotFoundError:
             logging.error("Cannot find redis on the server, exiting...")
             exit(1)
