@@ -10,14 +10,17 @@ class CostEstimator(object):
         pass
 
     def perf_ckpt_restore_time(self):
-        # profile a 100MB tensor (50M params), get checkpoint and restore time in milliseconds
+        # profile a 200MB tensor (100M params), get checkpoint and restore time in milliseconds
         # checkpointing
-        tensor = torch.zeros((50, 1000, 1000), dtype=torch.float16, device='cuda:0')
+        tensor = torch.zeros((100, 1000, 1000), dtype=torch.float16, device='cuda:0')
         f = open("tmp_tensor.pt", 'wb')
         start = time.time()
         torch.save(tensor, f)
-        end = time.time()
+        f.flush()
         f.close()
+        end = time.time()
+        # cleanup system cache
+        os.system("echo 3 > /proc/sys/vm/drop_caches")
         # restoring
         f = open("tmp_tensor.pt", 'rb')
         start2 = time.time()
@@ -26,7 +29,7 @@ class CostEstimator(object):
         f.close()
         # cleanup
         os.remove("tmp_tensor.pt")
-        logging.critical(f"write BW={100/(end - start):.2f}MB/s, read BW={100/(end2 - start2):.2f}MB/s")
+        logging.critical(f"write BW={200/(end - start):.2f}MB/s, read BW={200/(end2 - start2):.2f}MB/s")
         return (end - start) * 1000, (end2 - start2) * 1000
 
     def get_dp_adjustment_cost(self, dp_check_interval: int, min_iter: float, slow_iter: float) -> float:
@@ -45,8 +48,8 @@ class CostEstimator(object):
         max_ckpt_time = 0
         max_restore_time = 0
         for param in model_params:
-            node_ckpt_time = param * ckpt_time / (50 * 1000 * 1000)
-            node_restore_time = param * restore_time / (50 * 1000 * 1000)
+            node_ckpt_time = param * ckpt_time / (100 * 1000 * 1000)
+            node_restore_time = param * restore_time / (100 * 1000 * 1000)
             max_ckpt_time = max(node_ckpt_time, max_ckpt_time)
             max_restore_time = max(node_restore_time, max_restore_time)
         logging.critical(f"checkpointing={max_ckpt_time}ms, restoring={max_restore_time}ms, initialization={init_time}ms")
