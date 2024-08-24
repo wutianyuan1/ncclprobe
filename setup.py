@@ -10,7 +10,8 @@ setup(
         'matplotlib>=3.7.0',
         'pandas>=1.5.0',
         'statsmodels>=0.13.0',
-        'Rbeast>=0.1.19'
+        'Rbeast>=0.1.19',
+        'cvxpy>=1.5.3'
     ],
     entry_points = {
         'console_scripts': [

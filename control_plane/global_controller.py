@@ -177,7 +177,14 @@ class GlobalServer(object):
         cliques = self.analyzer.build_comm_cliques(comms)
         # (2) analyze profile results and determine which ring/tree to validate
         slow_cliques = self.analyzer.find_slow_clique(perfs, cliques)
-        validate_topos = [(c, GlobalTopo(c.comms)) for c in slow_cliques]
+        # validate_topos = [(c, GlobalTopo(c.comms)) for c in slow_cliques]
+        validate_topos = []
+        added_clis = {}
+        for c in cliques.values():
+            if c.is_dp and c.__hash__() not in added_clis:
+                validate_topos.append((c, GlobalTopo(c.comms)))
+                added_clis[c.__hash__()] = 1
+        logging.info(f"Topos to validate: {validate_topos}")
         # (3) dispatch validation jobs and collect validation results
         self.pause_training()
         time.sleep(1)

@@ -58,7 +58,10 @@ class CommunicatorClique(object):
 
     def __repr__(self):
         return str(self)
-    
+
+    def __hash__(self):
+        return hash(self.tag + str(sorted(self.ranks)))
+
     @classmethod
     def build_clique(cls, comms: List[Communicator], tp: List, dp: List, pp: List):
         def find_ppstage(rep_rank):
@@ -108,10 +111,13 @@ class GlobalAnalyzer(object):
             else:
                 idhash2clique[c.id_hash].append(c)
         addr2clique = {}
+        added_clis = set()
         for comm_clique in idhash2clique.values():
             for c in comm_clique:
-                addr2clique[c.comm_addr] = CommunicatorClique.build_clique(
-                    comm_clique, self.tp, self.dp, self.pp)
+                cli = CommunicatorClique.build_clique(comm_clique, self.tp, self.dp, self.pp)
+                if cli not in added_clis:
+                    addr2clique[c.comm_addr] = cli
+                    added_clis.add(cli.__hash__())
         return addr2clique
     
     def get_parallel_states(self):
