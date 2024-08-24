@@ -1,9 +1,11 @@
 import logging
 import time
-from typing import Dict, List
+import numpy as np
+from typing import Dict, List, Tuple
 from copy import deepcopy
 from .global_analyzer import PerformanceMetric, CommunicatorClique
 from .dp_planner import get_time_array, solve_dp
+from .pp_planner import apply_layer_split
 from .cost_estimator import CostEstimator
 
 
@@ -45,6 +47,33 @@ class MitigationPlan(object):
         logging.info(f"DP computation results: {dp_results}")
         return dp_results
 
+    def parse_communication_results(self, comm_results: Dict[Tuple[int], List]):
+        # Example of 8 GPU communication topos
+        # TP: [0, 1], [2, 3], [4, 5], [6, 7]
+        # DP: [0, 2], [1, 3], [4, 6], [5, 7]
+        # PP: [0, 4], [1, 5], [2, 6], [3, 7]
+        # comm_times = {0: t0, 1: t1, 4: t4, 5: t5}
+        comm_times = {}
+        for communicator_ranks, communicator_results in comm_results.items():
+            comm_max_time = 0
+            for task_result in communicator_results:
+                # task_result: Dict[int(rank), PerformanceMetric]
+                task_max_time = max([i.avg_lat for i in task_result.values()])
+                comm_max_time = max(comm_max_time, task_max_time)
+            comm_times[communicator_ranks[0]] = comm_max_time
+        logging.info(f"Max times of each communicator: {comm_times}")
+        tp_ranks = self.client.get("0_tp").decode()
+        tp_degree = len(tp_ranks.split("_"))
+        logging.info(f"TP degree: {tp_degree}")
+        comm_items = sorted(list(comm_times.items()))
+        max_comm_time_per_pp_stage = []
+        for i in range(len(comm_items)):
+            max_comm_time_per_pp_stage.append(
+                max([comm_items[j][1] for j in range(i, i + tp_degree)])
+            )
+        logging.info(f"max_comm_time_per_pp_stage: {max_comm_time_per_pp_stage}")
+        return max_comm_time_per_pp_stage
+
     def adjust_batchsize_distribution(self,
                                       comp_results: Dict[int, PerformanceMetric],
                                       cliques: Dict[int, CommunicatorClique]):
@@ -68,18 +97,42 @@ class MitigationPlan(object):
                                  comm_cliques: Dict[int, CommunicatorClique],
                                  comm_tasks: List,
                                  comm_results: List[Dict[int, PerformanceMetric]]):
-        pass
+        max_comm_time_per_pp_stage = np.array(self.parse_communication_results(comm_results))
+        max_comm_time_per_pp_stage = 1 / max_comm_time_per_pp_stage  # inverse of latency -> throughput
+        max_comm_time_per_pp_stage = max_comm_time_per_pp_stage / np.sum(max_comm_time_per_pp_stage)
+        layer_split = []
+        total_num_layers = int(self.client.get("total_num_layers").decode())
+        for i in range(len(max_comm_time_per_pp_stage) - 1):
+            layer_split.append(round(total_num_layers * max_comm_time_per_pp_stage[i]))
+        last_num_layers = total_num_layers - sum(layer_split)
+        layer_split.append(last_num_layers)
+        apply_layer_split(self.client, layer_split)
+        # pause the training process and invoke restart from memory
+        self.client.set("terminate_ctl", 123)
+
+    def find_slow_reason(self,
+                         comp_results: Dict[int, PerformanceMetric],
+                         comm_results: Dict[Tuple[int], List]):
+        comp_results = np.array([i.avg_lat for i in comp_results.values()])
+        if np.max(comp_results) > 2 * np.median(comp_results):
+            return "comp"
+        comm_parsed = np.array(self.parse_communication_results(comm_results))
+        if np.max(comm_parsed) > 1.1 * np.median(comm_parsed):
+            return "comm"
 
     def mitigate_failslow(self,
                           dp_check_interval: int,
                           comp_results: Dict[int, PerformanceMetric],
                           comm_cliques: Dict[int, CommunicatorClique],
-                          comm_tasks: List,
-                          comm_results: List[Dict[int, PerformanceMetric]]):
+                          comm_tasks: Dict[Tuple[int], List],
+                          comm_results: Dict[Tuple[int], List]):
+        logging.info("Mitigating fail-slow problem...")
         slow_start = time.time()
         dp_adjusted, pp_adjusted = False, False
         slow_iter_time_init = float(self.client.get("cur_iter_time").decode())
         min_iter_time_init = float(self.client.get('min_iter_time').decode())
+        reason = self.find_slow_reason(comp_results, comm_results)
+        logging.info(f"Reason of fail-slow is {reason}")
         if slow_iter_time_init >= min_iter_time_init * 1.1:
             fast_to_slow = True
         else:
@@ -93,11 +146,11 @@ class MitigationPlan(object):
             pp_cost = self.estimator.get_pp_adjustment_cost()
             time_since_slow = 1000 * (time.time() - slow_start)
             logging.info(f"[Mitigation Plan] DPcost={dp_cost}, PPcost={pp_cost}, time_since_slow={time_since_slow}, min_iter={min_iter_time}, slow_iter={slow_iter_time}")
-            if time_since_slow >= dp_cost and not dp_adjusted:
+            if (reason == 'comp') and (time_since_slow >= dp_cost) and (not dp_adjusted):
                 logging.info("[Mitigation Plan] Adjust DP")
                 self.adjust_batchsize_distribution(comp_results, comm_cliques)
                 dp_adjusted = True
-            if time_since_slow >= pp_cost and not pp_adjusted:
+            if (reason == 'comm') and (time_since_slow >= pp_cost) and (not pp_adjusted):
                 logging.info("[Mitigation Plan] Adjust PP")
                 self.adjust_pipeline_parallel(comm_cliques, comm_tasks, comm_results)
                 pp_adjusted = True

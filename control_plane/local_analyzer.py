@@ -4,6 +4,7 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from datetime import datetime
 from .slow_detection import find_period, find_performance_drop
 from .visualizer import ValueLogger
 from multiprocessing import shared_memory, resource_tracker
@@ -173,7 +174,7 @@ def detect_failslow(record: NcclRecord, plot=False):
         logging.info(f"Rank {global_rank}: repeat pattern starts from {start}, period = {period}, pattern = {call_id[start: start + period]}")
         performance_drops[global_rank], estimated_iter_time['rank' + str(global_rank)] = find_performance_drop(
             call_id, call_time, period, start, plot=plot, plot_args=pargs)
-    logging.info(f"Esimated iteration time: {estimated_iter_time}\n")
+    logging.info(f"[{datetime.now()}] Esimated iteration time: {estimated_iter_time}\n")
     # logger = ValueLogger()
     # logger.push_val("EstimatedIterationTime", 'rank', estimated_iter_time)
 

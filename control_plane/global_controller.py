@@ -193,9 +193,10 @@ class GlobalServer(object):
         comp_results = self.validate_computation()
 
         # (3.2) check communication
-        all_tasks, all_results = [], []
+        all_tasks, all_results = {}, {}
         for clique, topo in validate_topos:
             # Skip single-element ring/trees
+            clique_tasks, clique_results = [], []
             if len(topo.rings[0]) == 1 or len(topo.trees[0]) == 1:
                 continue
             comm_addrs = {}
@@ -203,12 +204,16 @@ class GlobalServer(object):
             for cm in clique.comms:
                 comm_addrs[cm.group_rank] = cm.comm_addr
                 group2global[cm.group_rank] = cm.global_rank
+            all_gloabal_ranks = sorted(list(group2global.values()))
             tasks, results = self.validate_ring(topo.rings[0], comm_addrs, group2global)
-            all_tasks += tasks
-            all_results += results
+            clique_tasks += tasks
+            clique_results += results
             tasks, results = self.validate_tree(topo.trees[0], comm_addrs, group2global)
-            all_tasks += tasks
-            all_results += results
+            clique_tasks += tasks
+            clique_results += results
+
+            all_tasks[tuple(all_gloabal_ranks)] = clique_tasks
+            all_results[tuple(all_gloabal_ranks)] = clique_results
         # Then, clear the failed slow events and resume all jobs to monitoring state
         self.storage.ltrim("failslow_ranks", 1, 0)
         self.set_monitoring()

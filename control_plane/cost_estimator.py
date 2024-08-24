@@ -39,7 +39,7 @@ class CostEstimator(object):
         return dp_check_interval * (slow_iter - min_iter) / 2
 
     def get_pp_adjustment_cost(self) -> float:
-        return 5000
+        return 60 * 1000
 
     def get_restart_adjustment_cost(self, model_params: List[int]=[]) -> float:
         # @param model_params: #parameters per node
