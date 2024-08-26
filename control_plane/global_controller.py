@@ -241,19 +241,19 @@ class GlobalServer(object):
         time.sleep(1)
 
         # First, check computation performance
-        comp_results = self.validate_computation()
+        # comp_results = self.validate_computation()
 
-        for clique, topo in validate_topos:
-            # Skip single-element ring/trees
-            if len(topo.rings[0]) == 1 or len(topo.trees[0]) == 1:
-                continue
-            comm_addrs = {}
-            group2global = {}
-            for cm in clique.comms:
-                comm_addrs[cm.group_rank] = cm.comm_addr
-                group2global[cm.group_rank] = cm.global_rank
-            self.validate_ring(topo.rings[0], comm_addrs, group2global)
-            self.validate_tree(topo.trees[0], comm_addrs, group2global)
+        # for clique, topo in validate_topos:
+        #     # Skip single-element ring/trees
+        #     if len(topo.rings[0]) == 1 or len(topo.trees[0]) == 1:
+        #         continue
+        #     comm_addrs = {}
+        #     group2global = {}
+        #     for cm in clique.comms:
+        #         comm_addrs[cm.group_rank] = cm.comm_addr
+        #         group2global[cm.group_rank] = cm.global_rank
+        #     self.validate_ring(topo.rings[0], comm_addrs, group2global)
+        #     self.validate_tree(topo.trees[0], comm_addrs, group2global)
         # Finally, clear the failed slow events and resume all jobs to monitoring state
         self.set_monitoring()
 

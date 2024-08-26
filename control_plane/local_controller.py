@@ -3,6 +3,7 @@ import time
 import logging
 import redis
 import numpy as np
+import multiprocessing as mp
 import redis.client
 from . import local_analyzer
 
@@ -70,8 +71,15 @@ class LocalController(object):
         while True:
             time.sleep(5)
             try:
-                cur_event_ids, failslow_events, estimated_iter_time =\
-                    local_analyzer.detect_failslow(self.record_buffer, plot=False)
+                # Really confused why there is a segmentation fault in Rbeast
+                # I can only solve it by using another process...
+                with mp.Pool(1) as pool:
+                    results = pool.starmap(
+                        local_analyzer.detect_failslow, [(self.record_buffer, False)])
+                    if results[0] is None:
+                        logging.info("No peaks in ACF, continues...")
+                        continue
+                    cur_event_ids, failslow_events, estimated_iter_time = results[0]
                 # Handle fail-stop
                 failstop_events = self.detect_failstop(prev_event_ids, cur_event_ids)
                 for stop_rank in failstop_events:
@@ -146,6 +154,7 @@ class LocalController(object):
             except Exception as e:
                 logging.warning("Cannot detect failslow currently, there may be an error if it persists"\
                     + ", reason: " + str(e))
+                logging.warning(f"{e.__traceback__}")
 
 
 def start_local_controller():

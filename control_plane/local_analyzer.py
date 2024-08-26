@@ -163,7 +163,7 @@ def detect_failslow(record: NcclRecord, plot=False):
         last_event_ids[global_rank] = per_gpu_record['event_id'].iloc[-1]
         call_time = per_gpu_record['call_time'].to_numpy()
         call_id = per_gpu_record['call_number'].to_numpy()
-        start, period = find_period(call_id, nlags=200, significance_level=0.8)
+        start, period = find_period(call_id, nlags=200, significance_level=0.95)
         if period is None:
             return None
         if plot:
