@@ -142,11 +142,11 @@ class MitigationPlan(object):
             min_iter_time = float(self.client.get('min_iter_time').decode())
             # iteration time after fail-slow
             slow_iter_time = float(self.client.get("cur_iter_time").decode())
-            dp_cost = self.estimator.get_dp_adjustment_cost(dp_check_interval, min_iter_time, slow_iter_time)
+            dp_cost = self.estimator.get_dp_adjustment_cost(dp_check_interval//2, min_iter_time, slow_iter_time)
             pp_cost = self.estimator.get_pp_adjustment_cost()
             time_since_slow = 1000 * (time.time() - slow_start)
             logging.info(f"[Mitigation Plan] DPcost={dp_cost}, PPcost={pp_cost}, time_since_slow={time_since_slow}, min_iter={min_iter_time}, slow_iter={slow_iter_time}")
-            if (reason == 'comp') and (time_since_slow >= dp_cost) and (not dp_adjusted):
+            if (reason != 'comm') and (time_since_slow >= dp_cost) and (not dp_adjusted):
                 logging.info("[Mitigation Plan] Adjust DP")
                 self.adjust_batchsize_distribution(comp_results, comm_cliques)
                 dp_adjusted = True
