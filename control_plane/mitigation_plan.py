@@ -133,10 +133,10 @@ class MitigationPlan(object):
         min_iter_time_init = float(self.client.get('min_iter_time').decode())
         reason = self.find_slow_reason(comp_results, comm_results)
         logging.info(f"Reason of fail-slow is {reason}")
-        if slow_iter_time_init >= min_iter_time_init * 1.1:
-            fast_to_slow = True
-        else:
-            fast_to_slow = False
+        if slow_iter_time_init <= min_iter_time_init * 1.1:
+            self.adjust_batchsize_distribution(comp_results, comm_cliques)
+            return
+
         while True:
             # normal iteration time
             min_iter_time = float(self.client.get('min_iter_time').decode())
@@ -154,10 +154,6 @@ class MitigationPlan(object):
                 logging.info("[Mitigation Plan] Adjust PP")
                 self.adjust_pipeline_parallel(comm_cliques, comm_tasks, comm_results)
                 pp_adjusted = True
-            # if this fail-slow ends, and performance backs to normal, break
-            # if this performance change is from slow stage to normal stage, this will be skipped
-            if slow_iter_time <= 1.1 * min_iter_time and fast_to_slow:
-                break
             if time_since_slow >= 2 * pp_cost:
                 break
             time.sleep(1)

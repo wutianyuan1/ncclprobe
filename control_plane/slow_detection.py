@@ -37,7 +37,7 @@ def find_performance_drop_naive(call_id, call_time, period, start):
 
 def validate_performance_drop(
         iter_durations, iter_start, change_point_ids, change_points,
-        length_thresh=10, degradation_thresh=0.2):
+        length_thresh=10, degradation_thresh=0.1):
     # @param length_thresh: we consider this performance change point is
     # valid only if the interval between two change points >= length_thresh
     # @param degradation_thresh: we report this event as a performance change
