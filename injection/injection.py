@@ -6,7 +6,8 @@ import random
 import redis
 import socket
 import torch
-import torch.multiprocessing as mp
+import multiprocessing as mp
+import multiprocessing.pool
 import torch.distributed as dist
 import matplotlib.pyplot as plt
 from slow_comp import set_computation_slow
@@ -21,27 +22,32 @@ def print_error(e):
 
 
 def generate_slow_durations(nnodes=1, load_fn=None):
+    num_gpus = 4
+    pp_stages = 4
+    dp_groups = nnodes / pp_stages
     if load_fn is None:
         ret = []
-        for node_id in range(nnodes):
+        for node_id in range(1):
             timestamps = []
             current_time = 0
-            while current_time < 3600:
+            while current_time < 6000:
                 # poisson process
-                interarrival_time = np.random.exponential(scale=300)
+                interarrival_time = np.random.exponential(scale=240)
                 start_time = current_time + interarrival_time
                 duration = max(1, int(np.random.normal(loc=120, scale=20)))
                 reason = np.random.randint(0, 2)  # 0: comp; 1: comm
                 if reason == 0:
-                    gpu_1 = np.random.randint(0, 8)
+                    gpu_1 = np.random.randint(0, num_gpus)
                     gpu_2 = gpu_1
                     node_1 = node_id
                     node_2 = node_id
                 else:
-                    gpu_1 = np.random.randint(0, 8)
-                    gpu_2 = np.random.randint(0, 8)
-                    node_1 = node_id
-                    node_2 = np.random.choice([i for i in range(nnodes)])
+                    gpu_1 = 0
+                    gpu_2 = 0
+                    congestion_stage = np.random.choice(list(range(pp_stages)))
+                    candidate_nodes = [i for i in range(int(congestion_stage * dp_groups), int((congestion_stage + 1) * dp_groups))]
+                    node_1 = np.random.choice([i for i in candidate_nodes])
+                    node_2 = np.random.choice([i for i in candidate_nodes if i != node_1])
                 timestamps.append((start_time, duration, node_1, gpu_1, node_2, gpu_2, reason))
                 current_time = start_time + duration + 60
             ret.append(np.array(timestamps, dtype=int))
@@ -107,13 +113,13 @@ def main():
 
 
     # Get the traces to run
-    # all_data = generate_slow_durations(load_fn=f'{1}node.pkl')
+    # all_data = generate_slow_durations(load_fn=f'{8}node.pkl')
     # my_data = all_data[0]
     my_data = [
         # [1, 5, 0, 0, 2, 0, 1],
         # [9, 5, 1, 0, 3, 0, 1],
-        [25, 40, 2, 0, 3, 0, 1],
-        [90, 30, 2, 0, 2, 0, 0]
+        [25, 80, 2, 0, 3, 0, 1],
+        [130, 30, 2, 0, 2, 0, 0]
     ]
     print(my_data)
 
@@ -151,3 +157,5 @@ if __name__ == "__main__":
     random.seed(42)
     np.random.seed(42)
     main()
+    # print(generate_slow_durations(8))
+    # print(generate_slow_durations(8, '8node.pkl'))
