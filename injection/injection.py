@@ -1,16 +1,19 @@
 import os
-import subprocess
 import time
 import numpy as np
 import pickle
 import random
+import redis
+import socket
 import torch
 import torch.multiprocessing as mp
 import torch.distributed as dist
 import matplotlib.pyplot as plt
+from slow_comp import set_computation_slow
+from slow_comm import set_communication_slow
 
 
-sim_factor = 0.002
+sim_factor = 1
 
 
 def print_error(e):
@@ -71,52 +74,6 @@ def plot_slow_node(data):
     plt.savefig("1node.png")
 
 
-def set_gpu_frequency(gpu_id, duration, frequency=100):
-    # fail-slow
-    cmd = f"nvidia-smi -i {gpu_id} -lgc {frequency}"
-    try:
-        subprocess.run(cmd, shell=True, check=True)
-        print(f"Set GPU frequency to {frequency} MHz for GPU {gpu_id}")
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to set GPU frequency: {e}")
-    
-    # wait duration
-    time.sleep(duration * sim_factor)
-
-    # back to normal
-    cmd = f"nvidia-smi -i {gpu_id} -lgc 3000"
-    try:
-        subprocess.run(cmd, shell=True, check=True)
-        print(f"Set GPU frequency back to 3000 MHz for GPU {gpu_id}")
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to set GPU frequency: {e}")
-
-
-def set_computation_slow(task_id, start, duration, gpu_id):
-    print(f"Lock task {task_id}, start={start}, duration={duration}, GPU={gpu_id}")
-    time.sleep(start * sim_factor)
-    set_gpu_frequency(gpu_id, duration)
-
-
-def set_communication_slow(task_id, start, duration, src_node, src_gpu, dst_node, dst_gpu):
-    my_rank = dist.get_rank()
-    if my_rank != src_node and my_rank != dst_node:
-        return
-    print(f"Comm task {task_id}, rank={my_rank}, start={start}, duration={duration}, src [node={src_node}, GPU={src_gpu}], dst [node={dst_node}, GPU={dst_gpu}]")
-    time.sleep(start * sim_factor)
-    # TODO: perform communication with dst
-    if my_rank == src_node:
-        print("src!!")
-        data = torch.zeros((1024, 1024, 20), dtype=torch.float32, device=f'cuda:{src_gpu}')
-        print("111")
-        dist.send(data, dst=dst_node)
-        print("send!!")
-    elif my_rank == dst_node:
-        print("dst!!")
-        data = torch.zeros((1024, 1024, 20), dtype=torch.float32, device=f'cuda:{dst_gpu}')
-        ret = dist.recv(data, src=src_node)
-        print("recv!!")
-
 
 def main():
     world_size = int(os.environ['WORLD_SIZE'])
@@ -126,7 +83,7 @@ def main():
 
     # Initialize the process group
     dist.init_process_group(
-        backend='nccl',
+        backend='gloo',
         init_method=f'tcp://{master_addr}:{master_port}',
         world_size=world_size,
         rank=rank
@@ -134,27 +91,58 @@ def main():
 
     # node_id is rank_id because each node only run one proc
     node_id = dist.get_rank()
-    print(f"My rank: {node_id}")
+    hostname = socket.gethostname()
+    ip = socket.gethostbyname(hostname)
+    ip_tensor = torch.tensor([int(i) for i in ip.split(".")], dtype=torch.int32)
+    print(f"My rank: {node_id}, IP={ip}, ip_tensor={ip_tensor}")
+
+    ip_table = [torch.zeros(4, dtype=torch.int32) for _ in range(world_size)]
+    dist.all_gather(ip_table, ip_tensor)
+    ip_table = [".".join([str(i) for i in line.tolist()]) for line in ip_table]
+    print(f"IP table: {ip_table}")
 
     # reset GPU frequency
     os.system("nvidia-smi -lgc 3000")
     time.sleep(1)
 
+
     # Get the traces to run
-    all_data = generate_slow_durations(load_fn=f'{1}node.pkl')
-    my_data = all_data[0]
+    # all_data = generate_slow_durations(load_fn=f'{1}node.pkl')
+    # my_data = all_data[0]
+    my_data = [
+        # [1, 5, 0, 0, 2, 0, 1],
+        # [9, 5, 1, 0, 3, 0, 1],
+        [25, 40, 2, 0, 3, 0, 1],
+        [90, 30, 2, 0, 2, 0, 0]
+    ]
     print(my_data)
 
-    pool = mp.Pool(len(my_data))
 
+    pool = mp.Pool(len(my_data))
+    rets = []
+    version = 1
+    st = time.time()
     for (i, line) in enumerate(my_data):
         start, duration, src_node, src_gpu, dst_node, dst_gpu, reason = line
         if reason == 0:
-            pool.apply_async(set_computation_slow, args=(i, start, duration, src_gpu))
+            ret = pool.apply_async(set_computation_slow,
+                                   args=(i, start, duration, src_node, src_gpu, st, ip_table, sim_factor, version),
+                                   error_callback=print_error)
+            version += 2
         else:
-            pool.apply_async(set_communication_slow, args=(i, start, duration, src_node, src_gpu, dst_node, dst_gpu), error_callback=print_error)
+            ret = pool.apply_async(set_communication_slow,
+                                   args=(i, start, duration, src_node, src_gpu, dst_node, dst_gpu, 9969+i, st, ip_table, sim_factor),
+                                   error_callback=print_error)
+        rets.append(ret)
     pool.close()
     pool.join()
+
+    for r in rets:
+        print("wait", r)
+        r.wait()
+
+    x = dist.all_reduce(torch.tensor([1]))
+    print("allreduce2 done", x)
 
     # Finalize the process group
     dist.destroy_process_group()
