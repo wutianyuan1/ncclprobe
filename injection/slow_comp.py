@@ -8,13 +8,19 @@ from dp_planner import PerformanceMetric, get_time_array, solve_dp
 
 def set_gpu_frequency(gpu_id, duration, sim_factor=0.1, redis_cli=None, frequency=100, version=1):
     # fail-slow
-    cmd = f"nvidia-smi -i {gpu_id} -lgc {frequency}"
-    try:
-        subprocess.run(cmd, shell=True, check=True)
-        print(f"Set GPU frequency to {frequency} MHz for GPU {gpu_id}")
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to set GPU frequency: {e}")
-    
+    # cmd = f"nvidia-smi -i {gpu_id} -lgc {frequency}"
+    # try:
+    #     subprocess.run(cmd, shell=True, check=True)
+    #     print(f"Set GPU frequency to {frequency} MHz for GPU {gpu_id}")
+    # except subprocess.CalledProcessError as e:
+    #     print(f"Failed to set GPU frequency: {e}")
+
+    cmd = f"python comp_worker.py --device {gpu_id} --duration {duration * sim_factor}"
+    proc = subprocess.Popen(cmd, shell=True)
+
+    # wait duration
+    time.sleep(15 * sim_factor)
+
     dp_data = redis_cli.get("0_dp")
     if dp_data is not None:
         dp_data = dp_data.decode().split("_")
@@ -31,8 +37,6 @@ def set_gpu_frequency(gpu_id, duration, sim_factor=0.1, redis_cli=None, frequenc
         micro_bsz, global_bsz = 2, 256
     print(f"DP world size: {num_dps}, my_dp_rank: {my_dp_rank}, micro_bsz: {micro_bsz}, global_bsz: {global_bsz}")
 
-    # wait duration
-    time.sleep(5 * sim_factor)
     compute_time = {
         i: PerformanceMetric(65, 65, 65, 0.01)
         for i in range(num_dps)
@@ -42,18 +46,20 @@ def set_gpu_frequency(gpu_id, duration, sim_factor=0.1, redis_cli=None, frequenc
     time_array = get_time_array(redis_cli, compute_time)
     print("Iter times:", time_array)
     dp_ret = solve_dp(time_array, micro_bsz, global_bsz)
-    print("DP:", dp_ret)
-    time.sleep((duration - 5) * sim_factor)
+    print(f"DP: {dp_ret}, version={version}")
     redis_cli.set('batch_distribution', str(dp_ret))
     redis_cli.set("dp_version", version)
 
     # back to normal
-    cmd = f"nvidia-smi -i {gpu_id} -lgc 3000"
-    try:
-        subprocess.run(cmd, shell=True, check=True)
-        print(f"Set GPU frequency back to 3000 MHz for GPU {gpu_id}")
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to set GPU frequency: {e}")
+    # cmd = f"nvidia-smi -i {gpu_id} -lgc 3000"
+    # try:
+    #     subprocess.run(cmd, shell=True, check=True)
+    #     print(f"Set GPU frequency back to 3000 MHz for GPU {gpu_id}")
+    # except subprocess.CalledProcessError as e:
+    #     print(f"Failed to set GPU frequency: {e}")
+
+    time.sleep((duration - 15) * sim_factor)
+    proc.wait()
 
     time.sleep(5 * sim_factor)
     fair_dp = [global_bsz // (micro_bsz * num_dps) for _ in range(num_dps)]

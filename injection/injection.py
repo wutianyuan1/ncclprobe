@@ -116,10 +116,9 @@ def main():
     # all_data = generate_slow_durations(load_fn=f'{8}node.pkl')
     # my_data = all_data[0]
     my_data = [
-        # [1, 5, 0, 0, 2, 0, 1],
-        # [9, 5, 1, 0, 3, 0, 1],
-        [25, 80, 2, 0, 3, 0, 1],
-        [130, 30, 2, 0, 2, 0, 0]
+        [50, 70, 0, 0, 0, 0, 0]
+        # [25, 80, 2, 0, 3, 0, 1],
+        # [130, 30, 2, 0, 2, 0, 0]
     ]
     print(my_data)
 
