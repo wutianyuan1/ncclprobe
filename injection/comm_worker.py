@@ -16,7 +16,7 @@ def send_recv(rank, tensor_size = 1024 * 1024 * 25, repeat=1):
         start_time = time.time()
         for _ in range(repeat):
             dist.send(send_tensor, dst=1)
-            torch.cuda.synchronize()
+        torch.cuda.synchronize()
         end_time = time.time()
         bandwidth = tensor_size * 4 * repeat / (end_time - start_time) / (1024 * 1024)  # MB/s
         logging.info(f"[{datetime.now()}] Rank {rank} sent data. Bandwidth: {bandwidth:.2f} MB/s")
@@ -25,7 +25,7 @@ def send_recv(rank, tensor_size = 1024 * 1024 * 25, repeat=1):
         start_time = time.time()
         for _ in range(repeat):
             dist.recv(recv_tensor, src=0)
-            torch.cuda.synchronize()
+        torch.cuda.synchronize()
         end_time = time.time()
         bandwidth = tensor_size * 4 * repeat / (end_time - start_time) / (1024 * 1024)  # MB/s
         logging.info(f"[{datetime.now()}] Rank {rank} received data. Bandwidth: {bandwidth:.2f} MB/s")
