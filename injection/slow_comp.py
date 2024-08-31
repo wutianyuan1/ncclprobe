@@ -6,8 +6,8 @@ from redis import StrictRedis
 from dp_planner import PerformanceMetric, get_time_array, solve_dp
 
 
-def set_gpu_frequency(gpu_id, duration, sim_factor=0.1, redis_cli=None, frequency=100, version=1):
-    # fail-slow
+def set_gpu_frequency(node_id, gpu_id, duration, sim_factor=0.1, redis_cli=None, frequency=100, version=1):
+    #### fail-slow by nvidia-smi: Previleged!!! ####
     # cmd = f"nvidia-smi -i {gpu_id} -lgc {frequency}"
     # try:
     #     subprocess.run(cmd, shell=True, check=True)
@@ -15,11 +15,19 @@ def set_gpu_frequency(gpu_id, duration, sim_factor=0.1, redis_cli=None, frequenc
     # except subprocess.CalledProcessError as e:
     #     print(f"Failed to set GPU frequency: {e}")
 
-    cmd = f"python comp_worker.py --device {gpu_id} --duration {duration * sim_factor}"
-    proc = subprocess.Popen(cmd, shell=True)
+    #### fail-slow by computation process: Not good!!! ####
+    # cmd = f"python comp_worker.py --device {gpu_id} --duration {duration * sim_factor}"
+    # proc = subprocess.Popen(cmd, shell=True)
+
+    #### End of fail-slow by set model hook ####
+    global_rank = node_id * torch.cuda.device_count() + gpu_id
+    print(f"Set delay for global rank {global_rank}")
+    redis_cli.set(f"delay_time_{global_rank}", 0.1)
+
+    reaction_time = 40 # seconds
 
     # wait duration
-    time.sleep(15 * sim_factor)
+    time.sleep(reaction_time * sim_factor)
 
     dp_data = redis_cli.get("0_dp")
     if dp_data is not None:
@@ -50,7 +58,9 @@ def set_gpu_frequency(gpu_id, duration, sim_factor=0.1, redis_cli=None, frequenc
     redis_cli.set('batch_distribution', str(dp_ret))
     redis_cli.set("dp_version", version)
 
-    # back to normal
+    time.sleep((duration - reaction_time) * sim_factor)
+
+    #### End of fail-slow by nvidia-smi: Previleged!!! ####
     # cmd = f"nvidia-smi -i {gpu_id} -lgc 3000"
     # try:
     #     subprocess.run(cmd, shell=True, check=True)
@@ -58,10 +68,14 @@ def set_gpu_frequency(gpu_id, duration, sim_factor=0.1, redis_cli=None, frequenc
     # except subprocess.CalledProcessError as e:
     #     print(f"Failed to set GPU frequency: {e}")
 
-    time.sleep((duration - 15) * sim_factor)
-    proc.wait()
+    #### End of fail-slow by computation process: Not good!!! ####
+    # proc.wait()
 
-    time.sleep(5 * sim_factor)
+    #### End of fail-slow by set model hook ####
+    print(f"End of delay for global rank {global_rank}")
+    redis_cli.set(f"delay_time_{global_rank}", 0)
+
+    time.sleep(reaction_time * sim_factor / 2)
     fair_dp = [global_bsz // (micro_bsz * num_dps) for _ in range(num_dps)]
     print("Fair DP: ", fair_dp)
     redis_cli.set('batch_distribution', str(fair_dp))
@@ -75,5 +89,5 @@ def set_computation_slow(task_id, start, duration, node_id, gpu_id, st, ip_table
     time.sleep(start * sim_factor)
     redis_cli = StrictRedis(host=ip_table[0])
     print(f"[t={time.time() - st}] Comp task {task_id}, start={start}, duration={duration}, GPU={gpu_id}")
-    set_gpu_frequency(gpu_id, duration, sim_factor=sim_factor, redis_cli=redis_cli, frequency=100, version=version)
+    set_gpu_frequency(node_id, gpu_id, duration, sim_factor=sim_factor, redis_cli=redis_cli, frequency=100, version=version)
     print(f"[t={time.time() - st}] Comp task {task_id} done!")
