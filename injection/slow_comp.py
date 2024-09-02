@@ -19,12 +19,22 @@ def set_gpu_frequency(node_id, gpu_id, duration, sim_factor=0.1, redis_cli=None,
     # cmd = f"python comp_worker.py --device {gpu_id} --duration {duration * sim_factor}"
     # proc = subprocess.Popen(cmd, shell=True)
 
-    #### End of fail-slow by set model hook ####
-    global_rank = node_id * torch.cuda.device_count() + gpu_id
-    print(f"Set delay for global rank {global_rank}")
-    redis_cli.set(f"delay_time_{global_rank}", 0.1)
+    ####  fail-slow by set model hook ####
+    if isinstance(node_id, list):
+        for nid in node_id:
+            assert isinstance(nid, int)
+            global_rank = nid * torch.cuda.device_count() + gpu_id
+            delay_time = 0.075
+            print(f"Set delay for global rank {global_rank}, delay_time = {delay_time}")
+            redis_cli.set(f"delay_time_{global_rank}", delay_time)
+    else:
+        assert isinstance(node_id, int)
+        global_rank = node_id * torch.cuda.device_count() + gpu_id
+        delay_time = 0.075
+        print(f"Set delay for global rank {global_rank}, delay_time = {delay_time}")
+        redis_cli.set(f"delay_time_{global_rank}", delay_time)
 
-    reaction_time = 40 # seconds
+    reaction_time = 30 + delay_time * 100  # seconds
 
     # wait duration
     time.sleep(reaction_time * sim_factor)
@@ -49,7 +59,12 @@ def set_gpu_frequency(node_id, gpu_id, duration, sim_factor=0.1, redis_cli=None,
         i: PerformanceMetric(65, 65, 65, 0.01)
         for i in range(num_dps)
     }
-    compute_time[my_dp_rank] = PerformanceMetric(515, 515, 515, 0.01)
+    if isinstance(node_id, int):
+        compute_time[my_dp_rank] = PerformanceMetric(515, 515, 515, 0.01)
+    else:
+        for nid in node_id:
+            nid_dp_rank = nid % num_dps
+            compute_time[nid_dp_rank] = PerformanceMetric(515, 515, 515, 0.01)
 
     time_array = get_time_array(redis_cli, compute_time)
     print("Iter times:", time_array)
@@ -72,9 +87,17 @@ def set_gpu_frequency(node_id, gpu_id, duration, sim_factor=0.1, redis_cli=None,
     # proc.wait()
 
     #### End of fail-slow by set model hook ####
-    print(f"End of delay for global rank {global_rank}")
-    redis_cli.set(f"delay_time_{global_rank}", 0)
+    if isinstance(node_id, list):
+        for nid in node_id:
+            assert isinstance(nid, int)
+            global_rank = nid * torch.cuda.device_count() + gpu_id
+            print(f"End of delay for global rank {global_rank}")
+            redis_cli.set(f"delay_time_{global_rank}", 0)
+    else:
+        print(f"End of delay for global rank {global_rank}")
+        redis_cli.set(f"delay_time_{global_rank}", 0)
 
+    # Adjust to fair DP
     time.sleep(reaction_time * sim_factor / 2)
     fair_dp = [global_bsz // (micro_bsz * num_dps) for _ in range(num_dps)]
     print("Fair DP: ", fair_dp)
@@ -84,8 +107,12 @@ def set_gpu_frequency(node_id, gpu_id, duration, sim_factor=0.1, redis_cli=None,
 
 def set_computation_slow(task_id, start, duration, node_id, gpu_id, st, ip_table, sim_factor, version):
     my_rank = dist.get_rank()
-    if my_rank != node_id:
-        return
+    if isinstance(node_id, int):
+        if my_rank != node_id:
+            return
+    if isinstance(node_id, list):
+        if my_rank != node_id[0]:
+            return
     time.sleep(start * sim_factor)
     redis_cli = StrictRedis(host=ip_table[0])
     print(f"[t={time.time() - st}] Comp task {task_id}, start={start}, duration={duration}, GPU={gpu_id}")

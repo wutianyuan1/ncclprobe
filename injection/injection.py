@@ -116,9 +116,12 @@ def main():
     # all_data = generate_slow_durations(load_fn=f'{8}node.pkl')
     # my_data = all_data[0]
     my_data = [
-        [60, 150, 2, 0, 2, 0, 0]
+        # [80, 120, [0,1,2], 0, 1, 0, 0],
+        # [260, 120, [0,1,2,3], 0, 1, 0, 0],
+        # [440, 120, [0,1,2], 0, 1, 0, 0],
+        # [620, 120, [0,1,2,3], 0, 1, 0, 0],
         # [120, 180, 0, 0, 1, 0, 1],
-        # [120, 180, 2, 0, 3, 0, 1],
+        [80, 150, 0, 0, 1, 0, 1],
         # [120, 180, 4, 0, 5, 0, 1],
         # [120, 180, 6, 0, 7, 0, 1],
         # [25, 80, 2, 0, 3, 0, 1],
@@ -139,6 +142,8 @@ def main():
                                    error_callback=print_error)
             version += 2
         else:
+            assert isinstance(src_node, int)
+            assert isinstance(dst_node, int)
             ret = pool.apply_async(set_communication_slow,
                                    args=(i, start, duration, src_node, src_gpu, dst_node, dst_gpu, 9969+i, st, ip_table, sim_factor),
                                    error_callback=print_error)

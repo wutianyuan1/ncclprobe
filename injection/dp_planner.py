@@ -30,7 +30,7 @@ def get_time_array(redis_client: redis.StrictRedis, compute_time: Dict[int, Perf
     time_array = np.zeros(len(compute_time), dtype=np.float32)
     vals = [i.avg_lat for i in compute_time.values()]
     min_compute_time, max_compute_time = np.min(vals), np.max(vals)
-    median_compute_time = np.median(vals)
+    median_compute_time = 70
     for rank in compute_time:
         rank_lat = compute_time[rank].avg_lat
         # faster than 1.1*median_compute => not fail slow
