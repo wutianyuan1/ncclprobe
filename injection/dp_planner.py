@@ -56,21 +56,22 @@ def solve_dp(time_array: np.ndarray, micro_bsz: int, global_bsz: int):
         cp.sum(num_microbatches * micro_bsz) == global_bsz  # The batch size sum constraint
     ]
     problem = cp.Problem(cp.Minimize(variance), constraints)
-    problem.solve(solver=cp.ECOS_BB)
+    problem.solve(solver=cp.ECOS_BB, verbose=False)
     num_microbatches = [round(i) for i in num_microbatches.value]
     logging.info(f"[DP solver] new DP plan is {num_microbatches}")
     return num_microbatches
 
 
 if __name__ == '__main__':
-    redis_host = 'localhost'
-    redis_port = 6379
-    client = redis.StrictRedis(redis_host, redis_port, db=0)
-    compute_time = {
-        0: PerformanceMetric(65, 65, 65, 0.01),
-        1: PerformanceMetric(515, 515, 515, 50.01),
-    }
-    time_array = get_time_array(client, compute_time)
+    # redis_host = 'localhost'
+    # redis_port = 6379
+    # client = redis.StrictRedis(redis_host, redis_port, db=0)
+    # compute_time = {
+    #     0: PerformanceMetric(65, 65, 65, 0.01),
+    #     1: PerformanceMetric(515, 515, 515, 50.01),
+    # }
+    # time_array = get_time_array(client, compute_time)
+    time_array = np.array([3063.01, 3063.01, 3063.01, 3063.01, 3063.01, 3063.01, 3063.01, 3063.01, 3063.01, 3063.01, 3063.01, 3063.01, 4250.766, 3063.01, 3063.01, 3063.01])/1000
     print(time_array)
     ret = solve_dp(time_array, 2, 256)
     print(ret)

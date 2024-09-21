@@ -114,18 +114,34 @@ def main():
 
     # Get the traces to run
     # all_data = generate_slow_durations(load_fn=f'{8}node.pkl')
-    # my_data = all_data[0]
-    my_data = [
+    # my_data = [
+        # [180, 240, 0, 4, 1, 3, 1], # comm: rank0->rank1, in ppstage-2
+        # [180, 50, 1, [4, 5, 6], 1, [4, 5, 6], 0], # comm: rank0->rank1, in ppstage-2
+        # [280, 240, 0, 4, 1, 3, 1], # comm: rank0->rank1, in ppstage-2
+        # [250, 500, 5, 0, 5, 0, 0] # comp: rank5, in dpgroup-1
         # [80, 120, [0,1,2], 0, 1, 0, 0],
         # [260, 120, [0,1,2,3], 0, 1, 0, 0],
         # [440, 120, [0,1,2], 0, 1, 0, 0],
         # [620, 120, [0,1,2,3], 0, 1, 0, 0],
         # [120, 180, 0, 0, 1, 0, 1],
-        [80, 150, 0, 0, 1, 0, 1],
         # [120, 180, 4, 0, 5, 0, 1],
         # [120, 180, 6, 0, 7, 0, 1],
         # [25, 80, 2, 0, 3, 0, 1],
         # [130, 30, 2, 0, 2, 0, 0]
+
+    ### Largescale, part1
+    my_data = [
+        [212, 97, 1, [4], 0.2, [4], 0],                     # comp-1, dp_12
+        [510, 126, 1, [3, 7], 0.3, [3, 7], 0],              # comp-2, dp_11, 15
+        [710, 1025, 6, 0, 7, 0, 1],                         # comm-1, last stage
+        [1191, 140, 3, [2], 0.4, [2], 0],                   # comp-3, dp_10                            
+        [1396, 108, 0, [0, 1, 2], 0.25, [0, 1, 2], 0],      # comp-4, dp_0, 1, 2
+        [1612, 209, 7, [2, 5], 0.4, [2, 5], 0],             # comp-5: dp_10, 13
+        [1868, 67, 5, [2, 4, 5], 0.3, [2, 4, 5], 0],        # comp-6, dp_10, 12, 13
+        [2078, 339, 0, 0, 1, 0, 1],                         # comm-2, first stage
+        [2504, 111, 2, [0], 0.35, [0], 0],                  # comp-7, dp_0
+        [2785, 155, 4, [1, 4, 7], 0.4, [1, 4, 7], 0],       # comp-8, dp_1,4,7
+        [3096, 507, 7, 0, 7, 0, 1],                         # comm-3, last stage
     ]
     print(my_data)
 
@@ -137,15 +153,16 @@ def main():
     for (i, line) in enumerate(my_data):
         start, duration, src_node, src_gpu, dst_node, dst_gpu, reason = line
         if reason == 0:
+            level = dst_node
             ret = pool.apply_async(set_computation_slow,
-                                   args=(i, start, duration, src_node, src_gpu, st, ip_table, sim_factor, version),
+                                   args=(i, start, duration, src_node, src_gpu, st, ip_table, sim_factor, version, level),
                                    error_callback=print_error)
             version += 2
         else:
             assert isinstance(src_node, int)
             assert isinstance(dst_node, int)
             ret = pool.apply_async(set_communication_slow,
-                                   args=(i, start, duration, src_node, src_gpu, dst_node, dst_gpu, 9969+i, st, ip_table, sim_factor),
+                                   args=(i, start, duration, src_node, src_gpu, dst_node, dst_gpu, 9969+i, st, ip_table, sim_factor, torch.cuda.device_count()),
                                    error_callback=print_error)
         rets.append(ret)
     pool.close()
@@ -155,8 +172,8 @@ def main():
         print("wait", r)
         r.wait()
 
-    x = dist.all_reduce(torch.tensor([1]))
-    print("allreduce2 done", x)
+    # x = dist.all_reduce(torch.tensor([1]))
+    # print("allreduce2 done", x)
 
     # Finalize the process group
     dist.destroy_process_group()

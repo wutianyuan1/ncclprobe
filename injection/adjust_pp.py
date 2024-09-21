@@ -4,9 +4,9 @@ from sys import argv
 from redis import StrictRedis
 
 
-def adjust_layer_split(redis_host, my_rank, world_size, sleep_time=5, is_back=0):
-    print("Adjust!!!")
+def adjust_layer_split(redis_host, my_rank, world_size, sleep_time=5, is_back=0, gpus_per_node=8):
     time.sleep(sleep_time)
+    print("Adjust!!!")
     client = StrictRedis(host=redis_host, port=6379)
     offset = 0
 
@@ -16,14 +16,14 @@ def adjust_layer_split(redis_host, my_rank, world_size, sleep_time=5, is_back=0)
         num_dps = len(dp_data)
     else:
         num_dps = world_size
-    my_pp_stage = my_rank // num_dps
-    total_pp_stages = world_size // num_dps
+    my_pp_stage = my_rank * gpus_per_node // num_dps
+    total_pp_stages = world_size * gpus_per_node // num_dps
     total_num_layers = client.get("total_num_layers")
     if total_num_layers is not None:
         total_num_layers = int(total_num_layers.decode())
     else:
-        total_num_layers = 32
-    print(f"[Rank {my_rank}] Apply layer split: DP size={num_dps}, my_pp_stage={my_pp_stage}, total_pp_stages={total_pp_stages}, total_num_layers={total_num_layers}")
+        total_num_layers = 64
+    print(f"[Rank {my_rank}] Apply layer split: gpus_per_node={gpus_per_node}, DP size={num_dps}, my_pp_stage={my_pp_stage}, total_pp_stages={total_pp_stages}, total_num_layers={total_num_layers}")
     if is_back == 0:
         layer_split = []
         throughput = np.array([1 for _ in range(total_pp_stages)], dtype=float)
@@ -50,6 +50,6 @@ def adjust_layer_split(redis_host, my_rank, world_size, sleep_time=5, is_back=0)
     print(f"Apply layer split {layer_split} done")
 
 if __name__ == '__main__':
-    redis_host, my_rank, world_size, sleep_time, is_back = argv[1], int(argv[2]), int(argv[3]), int(argv[4]), int(argv[5])
-    adjust_layer_split(redis_host, my_rank, world_size, sleep_time, is_back)
+    redis_host, my_rank, world_size, sleep_time, is_back, gpus_per_node = argv[1], int(argv[2]), int(argv[3]), int(argv[4]), int(argv[5]), int(argv[6])
+    adjust_layer_split(redis_host, my_rank, world_size, sleep_time, is_back, gpus_per_node)
     print("Adjust done!!!!")
